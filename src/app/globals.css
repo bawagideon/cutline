@@ -1,0 +1,54 @@
+@import "tailwindcss";
+
+:root {
+  --background: #0B0C0E;
+  --surface: #121417;
+  --surface-hover: #181B20;
+  --surface-border: #22262E;
+  --gold: #E5A93C;
+  --gold-hover: #F0B84D;
+  --gold-muted: #8C6B28;
+  --gold-subtle: #2D220E;
+  --foreground: #E6E8EB;
+  --foreground-muted: #9CA3AF;
+  --red: #F87171;
+  --red-subtle: #2A1215;
+  --green: #34D399;
+  --green-subtle: #0E2A1E;
+  --blue: #60A5FA;
+  --blue-subtle: #0F2236;
+}
+
+body {
+  background-color: var(--background);
+  color: var(--foreground);
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+  -webkit-font-smoothing: antialiased;
+  min-height: 100vh;
+}
+
+/* Custom Scrollbars */
+::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+::-webkit-scrollbar-track {
+  background: #0B0C0E;
+}
+::-webkit-scrollbar-thumb {
+  background: #22262E;
+  border-radius: 3px;
+}
+::-webkit-scrollbar-thumb:hover {
+  background: #333945;
+}
+
+/* Cutline Logo cut-corner geometry */
+.cutline-logo {
+  width: 18px;
+  height: 18px;
+  background-color: #E5A93C;
+  clip-path: polygon(0 0, 70% 0, 100% 30%, 100% 100%, 0 100%);
+  display: inline-block;
+  vertical-align: middle;
+}

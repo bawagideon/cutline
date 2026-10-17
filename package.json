@@ -1,0 +1,37 @@
+{
+  "name": "cutline-studio",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Cutline Studio — Approval-first video production pipeline: AI scripting, rendering, review gate, and YouTube publishing.",
+  "scripts": {
+    "dev": "next dev",
+    "build": "next build",
+    "start": "next start",
+    "lint": "next lint",
+    "type-check": "tsc --noEmit",
+    "test": "node --test --experimental-strip-types tests/crypto-vault.test.ts tests/render-provider.test.ts tests/safe-downloader.test.ts tests/worker-queue.test.ts"
+  },
+  "dependencies": {
+    "@google/genai": "^2.13.0",
+    "@supabase/supabase-js": "^2.48.0",
+    "clsx": "^2.1.1",
+    "date-fns": "^4.1.0",
+    "googleapis": "^144.0.0",
+    "lucide-react": "^0.475.0",
+    "next": "15.1.7",
+    "react": "^19.0.0",
+    "react-dom": "^19.0.0",
+    "tailwind-merge": "^2.5.5",
+    "zod": "^3.24.2"
+  },
+  "devDependencies": {
+    "@tailwindcss/postcss": "^4.0.0",
+    "@types/node": "^22.0.0",
+    "@types/react": "^19.0.0",
+    "@types/react-dom": "^19.0.0",
+    "postcss": "^8.4.49",
+    "tailwindcss": "^4.0.0",
+    "typescript": "^5.7.0",
+    "vitest": "^3.0.5"
+  }
+}

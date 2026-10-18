@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import { validateMediaUrl, MediaSecurityError } from '../src/lib/providers/storage/downloader.ts';
 
 describe('Safe Media Downloader Security Boundaries', () => {
-  it('permits trusted render provider domains', () => {
+  it('permits trusted render provider domains over HTTPS', () => {
     const validPixverse = validateMediaUrl('https://media.pixverse.ai/renders/out_01.mp4');
     assert.equal(validPixverse.hostname, 'media.pixverse.ai');
 
@@ -12,6 +12,23 @@ describe('Safe Media Downloader Security Boundaries', () => {
 
     const validGoogle = validateMediaUrl('https://commondatastorage.googleapis.com/gtv-videos-bucket/sample/BigBuckBunny.mp4');
     assert.equal(validGoogle.hostname, 'commondatastorage.googleapis.com');
+  });
+
+  it('strictly rejects non-HTTPS protocols including plain http://, file://, and ftp://', () => {
+    assert.throws(
+      () => validateMediaUrl('http://media.pixverse.ai/render.mp4'),
+      (err: Error) => err instanceof MediaSecurityError && err.message.includes('Only HTTPS is permitted')
+    );
+
+    assert.throws(
+      () => validateMediaUrl('file:///etc/passwd'),
+      (err: Error) => err instanceof MediaSecurityError && err.message.includes('Only HTTPS is permitted')
+    );
+
+    assert.throws(
+      () => validateMediaUrl('ftp://media.pixverse.ai/video.mp4'),
+      (err: Error) => err instanceof MediaSecurityError && err.message.includes('Only HTTPS is permitted')
+    );
   });
 
   it('rejects untrusted domains (SSRF and arbitrary host prevention)', () => {
@@ -23,17 +40,10 @@ describe('Safe Media Downloader Security Boundaries', () => {
     );
 
     assert.throws(
-      () => validateMediaUrl('http://169.254.169.254/latest/meta-data/'),
+      () => validateMediaUrl('https://169.254.169.254/latest/meta-data/'),
       (err: Error) => {
         return err instanceof MediaSecurityError;
       }
-    );
-  });
-
-  it('rejects forbidden protocols like file:// or ftp://', () => {
-    assert.throws(
-      () => validateMediaUrl('file:///etc/passwd'),
-      (err: Error) => err instanceof MediaSecurityError
     );
   });
 });

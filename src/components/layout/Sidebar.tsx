@@ -3,6 +3,7 @@
 import React from 'react';
 import Link from 'next/link';
 import { usePathname } from 'next/navigation';
+import { performClientSignOut } from '@/lib/auth/client-signout';
 
 export function Sidebar() {
   const pathname = usePathname();
@@ -10,25 +11,25 @@ export function Sidebar() {
   const navItems = [
     { label: 'Overview', href: '/overview' },
     { label: 'Projects', href: '/projects' },
-    { label: 'Production', href: '/production', badge: '3' },
-    { label: 'Media', href: '/media' },
-    { label: 'Publishing', href: '/publishing', badge: '2' },
+    { label: 'Production Queue', href: '/production', badge: '2' },
+    { label: 'Publishing', href: '/publishing', badge: '4' },
+    { label: 'Media Library', href: '/media' },
     { label: 'Channels', href: '/channels' },
-    { label: 'Analytics', href: '/analytics' },
     { label: 'Integrations', href: '/integrations' },
-    { label: 'Usage', href: '/usage' },
+    { label: 'Usage & Costs', href: '/usage' },
+    { label: 'Analytics', href: '/analytics' },
     { label: 'Settings', href: '/settings' },
   ];
 
   return (
-    <aside className="hidden md:flex flex-col w-64 bg-[#0B0C0E] border-r border-[#1B1E24] p-4 select-none shrink-0 min-h-screen">
+    <aside className="w-64 border-r border-[#1B1E24] bg-[#0B0C0E] p-4 flex flex-col justify-between hidden md:flex shrink-0 min-h-screen">
       {/* Brand Header */}
-      <div className="flex items-center gap-3 px-3 py-4 mb-4">
-        <div className="cutline-logo" />
+      <Link href="/overview" className="flex items-center gap-3 px-3 py-4 mb-4 group">
+        <div className="cutline-logo transition-transform duration-200 group-hover:scale-105" />
         <span className="text-white font-medium text-base tracking-tight">Cutline</span>
-      </div>
+      </Link>
 
-      {/* Navigation Links */}
+      {/* Navigation Links with Gold Edge Active Motif */}
       <nav className="flex-1 space-y-1">
         {navItems.map((item) => {
           const isActive = pathname === item.href || (item.href !== '/overview' && pathname.startsWith(item.href));
@@ -36,17 +37,17 @@ export function Sidebar() {
             <Link
               key={item.href}
               href={item.href}
-              className={`flex items-center justify-between px-3.5 py-2 rounded-lg text-sm transition-all duration-150 ${
+              className={`flex items-center justify-between px-3.5 py-2 rounded-lg text-sm transition-all duration-150 relative ${
                 isActive
-                  ? 'bg-[#181B20] text-white font-medium border border-[#2E333D]'
-                  : 'text-[#9CA3AF] hover:text-[#E6E8EB] hover:bg-[#121417]'
+                  ? 'bg-[#181B20] text-white font-medium border border-[#2E333D] border-l-2 border-l-[#E5A93C] shadow-sm'
+                  : 'text-[#9CA3AF] hover:text-[#E6E8EB] hover:bg-[#121417] border-l-2 border-l-transparent'
               }`}
             >
               <span>{item.label}</span>
               {item.badge && (
                 <span
-                  className={`text-xs px-2 py-0.5 rounded-full font-mono ${
-                    isActive ? 'bg-[#2D220E] text-[#E5A93C]' : 'bg-[#181B20] text-[#9CA3AF]'
+                  className={`text-xs px-2 py-0.5 rounded-full font-mono transition-transform duration-150 ${
+                    isActive ? 'bg-[#2D220E] text-[#E5A93C] scale-105' : 'bg-[#181B20] text-[#9CA3AF]'
                   }`}
                 >
                   {item.badge}
@@ -72,15 +73,25 @@ export function Sidebar() {
           Setup Checklist
         </Link>
 
-        {/* User Card */}
-        <div className="flex items-center gap-3 p-2.5 rounded-xl bg-[#121417] border border-[#22262E]">
-          <div className="w-8 h-8 rounded-full bg-[#1F242D] border border-[#2E333D] flex items-center justify-center text-xs font-semibold text-[#E5A93C]">
-            A
-          </div>
-          <div className="flex-1 min-w-0">
-            <div className="text-sm font-medium text-white truncate">Ade Okafor</div>
-            <div className="text-xs text-[#9CA3AF] truncate">Solo workspace</div>
-          </div>
+        {/* User Card with Sign-out */}
+        <div className="flex items-center justify-between gap-2 p-2.5 rounded-xl bg-[#121417] border border-[#22262E]">
+          <Link href="/settings" className="flex items-center gap-3 min-w-0 flex-1 hover:opacity-85 transition-opacity">
+            <div className="w-8 h-8 rounded-full bg-[#1F242D] border border-[#2E333D] flex items-center justify-center text-xs font-semibold text-[#E5A93C]">
+              A
+            </div>
+            <div className="flex-1 min-w-0">
+              <div className="text-sm font-medium text-white truncate">Ade Okafor</div>
+              <div className="text-xs text-[#9CA3AF] truncate">Solo workspace</div>
+            </div>
+          </Link>
+          <button
+            type="button"
+            title="Sign out"
+            onClick={() => performClientSignOut()}
+            className="p-1.5 text-[#9CA3AF] hover:text-[#F87171] hover:bg-[#181B20] rounded-lg transition-colors text-xs font-mono"
+          >
+            ↪
+          </button>
         </div>
       </div>
     </aside>

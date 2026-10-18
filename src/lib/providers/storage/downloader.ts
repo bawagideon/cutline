@@ -29,7 +29,7 @@ export class MediaSecurityError extends Error {
 }
 
 /**
- * Validates that the URL belongs to a trusted rendering host.
+ * Validates that the URL belongs to a trusted rendering host and uses HTTPS.
  */
 export function validateMediaUrl(targetUrl: string): URL {
   let parsed: URL;
@@ -39,8 +39,9 @@ export function validateMediaUrl(targetUrl: string): URL {
     throw new MediaSecurityError(`Invalid URL string: '${targetUrl}'`);
   }
 
-  if (parsed.protocol !== 'https:' && parsed.protocol !== 'http:') {
-    throw new MediaSecurityError(`Forbidden protocol: '${parsed.protocol}'`);
+  // Strictly enforce HTTPS
+  if (parsed.protocol !== 'https:') {
+    throw new MediaSecurityError(`Forbidden protocol: '${parsed.protocol}'. Only HTTPS is permitted for media downloads.`);
   }
 
   const hostname = parsed.hostname.toLowerCase();
@@ -60,6 +61,12 @@ export function validateMediaUrl(targetUrl: string): URL {
 /**
  * Safely downloads a video file, enforces size limits and timeout, computes SHA-256,
  * and persists to private Supabase storage.
+ *
+ * Security guarantees:
+ * 1. HTTPS only.
+ * 2. Manual redirect validation on every hop to prevent SSRF bypasses.
+ * 3. Streaming byte-level limits before memory buffering.
+ * 4. Fail-closed: Never reports success if storage write fails.
  */
 export async function downloadAndStoreMedia(
   videoUrl: string,
@@ -72,47 +79,103 @@ export async function downloadAndStoreMedia(
   const timeoutId = setTimeout(() => controller.abort(), DOWNLOAD_TIMEOUT_MS);
 
   try {
-    const response = await fetch(validatedUrl.toString(), {
-      method: 'GET',
-      signal: controller.signal,
-    });
+    let currentUrl = validatedUrl.toString();
+    let hops = 0;
+    let finalResponse: Response | null = null;
 
-    if (!response.ok) {
-      throw new Error(`Download HTTP error ${response.status}: ${response.statusText}`);
+    // Follow redirects manually with revalidation on every hop (max 3 hops)
+    while (hops <= 3) {
+      const response: Response = await fetch(currentUrl, {
+        method: 'GET',
+        signal: controller.signal,
+        redirect: 'manual',
+      });
+
+      if (response.status >= 300 && response.status < 400) {
+        const location = response.headers.get('location');
+        if (!location) {
+          throw new MediaSecurityError('Redirect response missing Location header.');
+        }
+        const nextUrl = new URL(location, currentUrl);
+        validateMediaUrl(nextUrl.toString()); // Enforce trust on redirect destination
+        currentUrl = nextUrl.toString();
+        hops++;
+        if (hops > 3) {
+          throw new MediaSecurityError('Exceeded maximum allowable redirect hops (3).');
+        }
+        continue;
+      }
+
+      if (!response.ok) {
+        throw new Error(`Download HTTP error ${response.status}: ${response.statusText}`);
+      }
+
+      finalResponse = response;
+      break;
     }
 
-    // Check Content-Length header if available
-    const contentLengthHeader = response.headers.get('content-length');
+    if (!finalResponse || !finalResponse.body) {
+      throw new MediaSecurityError('No response body received from media provider.');
+    }
+
+    // Verify declared Content-Length
+    const contentLengthHeader = finalResponse.headers.get('content-length');
     if (contentLengthHeader) {
       const declaredSize = parseInt(contentLengthHeader, 10);
       if (declaredSize > MAX_FILE_SIZE_BYTES) {
-        throw new MediaSecurityError(`File size (${declaredSize} bytes) exceeds maximum allowable limit of ${MAX_FILE_SIZE_BYTES} bytes.`);
+        throw new MediaSecurityError(
+          `File size (${declaredSize} bytes) exceeds maximum allowable limit of ${MAX_FILE_SIZE_BYTES} bytes.`
+        );
       }
     }
 
-    const contentType = response.headers.get('content-type') || 'video/mp4';
-    const arrayBuffer = await response.arrayBuffer();
-    const buffer = Buffer.from(arrayBuffer);
+    const contentType = finalResponse.headers.get('content-type') || 'video/mp4';
 
-    if (buffer.length > MAX_FILE_SIZE_BYTES) {
-      throw new MediaSecurityError(`Received payload (${buffer.length} bytes) exceeds safety ceiling.`);
+    // Stream chunks with running byte counter to prevent memory exhaustion
+    const reader = finalResponse.body.getReader();
+    const chunks: Uint8Array[] = [];
+    let receivedBytes = 0;
+
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      if (value) {
+        receivedBytes += value.length;
+        if (receivedBytes > MAX_FILE_SIZE_BYTES) {
+          reader.cancel().catch(() => {});
+          throw new MediaSecurityError(`Streamed media exceeded maximum safety ceiling of ${MAX_FILE_SIZE_BYTES} bytes.`);
+        }
+        chunks.push(value);
+      }
     }
 
-    // Compute SHA-256 hash
+    const buffer = Buffer.concat(chunks);
+
+    // Compute SHA-256 integrity hash
     const hash = crypto.createHash('sha256').update(buffer).digest('hex');
 
     // Upload to Supabase Storage
-    const supabase = getSupabaseServiceClient();
-    const { error: uploadError } = await supabase.storage
-      .from(bucketName)
-      .upload(destinationPath, buffer, {
-        contentType,
-        upsert: true,
-      });
+    const hasLiveSupabase = Boolean(
+      process.env.NEXT_PUBLIC_SUPABASE_URL && process.env.SUPABASE_SERVICE_ROLE_KEY
+    );
 
-    if (uploadError) {
-      // If bucket doesn't exist in local dev, log warning but return verified stats
-      console.warn(`[Storage Upload Warning] ${uploadError.message}`);
+    if (hasLiveSupabase) {
+      const supabase = getSupabaseServiceClient();
+      const { error: uploadError } = await supabase.storage
+        .from(bucketName)
+        .upload(destinationPath, buffer, {
+          contentType,
+          upsert: true,
+        });
+
+      if (uploadError) {
+        // Fail closed: Do NOT return successful result if storage persistence failed
+        throw new MediaSecurityError(
+          `Failed to persist media to storage bucket '${bucketName}': ${uploadError.message}`
+        );
+      }
+    } else if (process.env.NODE_ENV === 'production') {
+      throw new MediaSecurityError('Production storage credentials are missing.');
     }
 
     return {

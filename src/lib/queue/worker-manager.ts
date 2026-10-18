@@ -57,7 +57,18 @@ export class WorkerManager {
   }
 
   /**
+   * Redacts sensitive credentials (API keys, bearer tokens) from log entries and messages.
+   */
+  static redactSensitiveData(message: string): string {
+    return message
+      .replace(/(key=)(sk-[a-zA-Z0-9_\-]+)/g, '$1sk-••••')
+      .replace(/(Bearer\s+)[a-zA-Z0-9_\.\-]+/gi, '$1••••••••')
+      .replace(/(AIza[0-9A-Za-z-_]{35})/g, 'AIza••••');
+  }
+
+  /**
    * Atomically claims an available queued job or reclaims an expired lease.
+   * Utilizes database RPC with FOR UPDATE SKIP LOCKED or atomic conditional update.
    */
   async claimNextJob(): Promise<ProductionJobRecord | null> {
     const supabase = getSupabaseServiceClient();
@@ -65,7 +76,26 @@ export class WorkerManager {
     const leaseExpiration = new Date(now.getTime() + this.leaseDurationSec * 1000).toISOString();
     const nowIso = now.toISOString();
 
-    // Find a job that is 'queued' or has an expired lease
+    // 1. Try atomic PostgreSQL RPC with FOR UPDATE SKIP LOCKED
+    try {
+      const { data: rpcJob, error: rpcError } = await supabase
+        .rpc('claim_next_production_job', {
+          p_worker_id: this.workerId,
+          p_lease_sec: this.leaseDurationSec,
+        });
+
+      if (!rpcError && rpcJob) {
+        const job = Array.isArray(rpcJob) ? rpcJob[0] : rpcJob;
+        if (job) {
+          await this.logJobEvent(job.id, 'info', `Job claimed atomically via RPC by ${this.workerId}`, { leaseExpiration });
+          return job as ProductionJobRecord;
+        }
+      }
+    } catch {
+      // RPC fallback to atomic conditional update below
+    }
+
+    // 2. Fallback: Conditional update ensuring atomic lease ownership
     const { data: eligibleJobs, error: selectError } = await supabase
       .from('production_jobs')
       .select('*')
@@ -77,26 +107,27 @@ export class WorkerManager {
       return null;
     }
 
-    const job = eligibleJobs[0] as ProductionJobRecord;
+    const candidate = eligibleJobs[0] as ProductionJobRecord;
 
-    // Atomically claim lease
+    // Atomically claim lease ONLY if lock is still expired or unheld
     const { data: claimed, error: updateError } = await supabase
       .from('production_jobs')
       .update({
-        stage: job.stage === 'queued' ? 'started' : job.stage,
+        stage: candidate.stage === 'queued' ? 'started' : candidate.stage,
         locked_by: this.workerId,
         locked_until: leaseExpiration,
         updated_at: nowIso,
       })
-      .eq('id', job.id)
+      .eq('id', candidate.id)
+      .or(`locked_until.lt.${nowIso},locked_by.is.null,locked_by.eq.${this.workerId}`)
       .select()
       .single();
 
     if (updateError || !claimed) {
-      return null; // Another worker claimed it concurrently
+      return null; // Another worker claimed it concurrently; race safely avoided
     }
 
-    await this.logJobEvent(job.id, 'info', `Job claimed by ${this.workerId}`, { leaseExpiration });
+    await this.logJobEvent(candidate.id, 'info', `Job claimed conditionally by ${this.workerId}`, { leaseExpiration });
     return claimed as ProductionJobRecord;
   }
 
@@ -235,8 +266,7 @@ export class WorkerManager {
 
   private async logJobEvent(jobId: string, level: 'info' | 'warn' | 'error', message: string, metadata = {}): Promise<void> {
     const supabase = getSupabaseServiceClient();
-    // Redact sensitive patterns (API keys, tokens)
-    const redacted = message.replace(/(key=)(sk-[a-zA-Z0-9_\-]+)/g, '$1sk-••••');
+    const redacted = WorkerManager.redactSensitiveData(message);
     await supabase.from('job_logs').insert({
       job_id: jobId,
       level,

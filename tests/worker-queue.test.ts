@@ -8,11 +8,13 @@ describe('Queue Worker Manager & Security Leases', () => {
     assert.ok(worker, 'Worker manager should instantiate');
   });
 
-  it('redacts sensitive secrets in log messages', () => {
-    const sampleLog = 'Dispatched job with key=sk-proj-supersecretkey1234567890 to PixVerse';
-    const redacted = sampleLog.replace(/(key=)(sk-[a-zA-Z0-9_\-]+)/g, '$1sk-••••');
+  it('redacts sensitive secrets in log messages using real WorkerManager function', () => {
+    const sampleLog = 'Dispatched job with key=sk-proj-supersecretkey1234567890 and Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9';
+    const redacted = WorkerManager.redactSensitiveData(sampleLog);
 
     assert.ok(!redacted.includes('supersecretkey'), 'Secret key must be redacted');
-    assert.ok(redacted.includes('key=sk-••••'), 'Mask placeholder must be inserted');
+    assert.ok(!redacted.includes('eyJhbGciOiJIUzI1Ni'), 'Bearer token payload must be redacted');
+    assert.ok(redacted.includes('key=sk-••••'), 'Mask placeholder must be inserted for key');
+    assert.ok(redacted.includes('Bearer ••••••••'), 'Mask placeholder must be inserted for bearer token');
   });
 });

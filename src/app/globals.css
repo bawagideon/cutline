@@ -17,6 +17,14 @@
   --green-subtle: #0E2A1E;
   --blue: #60A5FA;
   --blue-subtle: #0F2236;
+
+  /* Motion Tokens */
+  --ease-enter: cubic-bezier(0.2, 0.8, 0.2, 1);
+  --ease-exit: cubic-bezier(0.4, 0, 1, 1);
+  --duration-press: 120ms;
+  --duration-standard: 200ms;
+  --duration-sheet: 260ms;
+  --duration-hero: 400ms;
 }
 
 body {
@@ -51,4 +59,192 @@ body {
   clip-path: polygon(0 0, 70% 0, 100% 30%, 100% 100%, 0 100%);
   display: inline-block;
   vertical-align: middle;
+}
+
+/* ==============================================================================
+   CUTLINE SIGNATURE MOTIFS & MOTION SPECIFICATION
+   ============================================================================== */
+
+/* Motif 1: The Cut (Diagonal Wipe) */
+.cut-wipe {
+  animation: cutWipe 400ms var(--ease-enter) forwards;
+}
+
+@keyframes cutWipe {
+  0% {
+    clip-path: polygon(0 0, 0 0, 0 100%, 0 100%);
+    opacity: 0.8;
+  }
+  100% {
+    clip-path: polygon(0 0, 100% 0, 100% 100%, 0 100%);
+    opacity: 1;
+  }
+}
+
+/* Motif 2: The Slate (Clapperboard Snap) */
+.slate-snap {
+  animation: slateSnap 260ms var(--ease-enter) forwards;
+}
+
+@keyframes slateSnap {
+  0% {
+    transform: rotate(-3.5deg) scale(0.97);
+    box-shadow: 0 0 0 1px rgba(229, 169, 60, 0.4);
+  }
+  60% {
+    transform: rotate(0.8deg) scale(1.01);
+  }
+  100% {
+    transform: rotate(0deg) scale(1);
+    box-shadow: 0 0 0 0 rgba(229, 169, 60, 0);
+  }
+}
+
+/* Motif 3: The Seal (Golden Stamp with Expanding Ripple) */
+.seal-stamp {
+  animation: sealPress 300ms var(--ease-enter) forwards;
+}
+
+@keyframes sealPress {
+  0% {
+    transform: scale(1.4);
+    opacity: 0;
+  }
+  65% {
+    transform: scale(0.95);
+    opacity: 1;
+  }
+  100% {
+    transform: scale(1);
+    opacity: 1;
+  }
+}
+
+.seal-ripple {
+  position: absolute;
+  inset: -8px;
+  border: 2px solid #E5A93C;
+  border-radius: 9999px;
+  animation: sealRippleEffect 400ms ease-out forwards;
+}
+
+@keyframes sealRippleEffect {
+  0% {
+    transform: scale(0.9);
+    opacity: 0.9;
+  }
+  100% {
+    transform: scale(1.8);
+    opacity: 0;
+  }
+}
+
+/* Motif 4: The Breathe (Soft 2.4s pulse on genuinely active states) */
+.breathe-live {
+  animation: breathePulse 2.4s ease-in-out infinite;
+}
+
+@keyframes breathePulse {
+  0%, 100% {
+    opacity: 1;
+  }
+  50% {
+    opacity: 0.35;
+  }
+}
+
+/* Motif 5: Global Cut-In (12px Rise Staggered Content Reveal) */
+.cut-in {
+  animation: cutIn 200ms var(--ease-enter) forwards;
+}
+
+@keyframes cutIn {
+  0% {
+    opacity: 0;
+    transform: translateY(12px);
+  }
+  100% {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+/* Global Press Feedback (scale to .97 in 100ms) */
+.btn-press {
+  transition: transform 100ms var(--ease-enter), filter 100ms ease;
+}
+.btn-press:active {
+  transform: scale(0.97);
+  filter: brightness(0.92);
+}
+
+/* Shake and Hold / Failure Nudge (for errors & invalid inputs) */
+.shake-nudge {
+  animation: shakeKeyframes 240ms ease-in-out;
+}
+
+@keyframes shakeKeyframes {
+  0%, 100% { transform: translateX(0); }
+  25% { transform: translateX(-5px); }
+  50% { transform: translateX(5px); }
+  75% { transform: translateX(-3px); }
+}
+
+/* Save Tick Drawing */
+.save-tick {
+  stroke-dasharray: 20;
+  stroke-dashoffset: 20;
+  animation: drawCheck 160ms var(--ease-enter) forwards;
+}
+
+@keyframes drawCheck {
+  to {
+    stroke-dashoffset: 0;
+  }
+}
+
+/* Gold Skeleton Sweep */
+.skeleton-sweep {
+  background: linear-gradient(
+    90deg,
+    #121417 0%,
+    #1C2028 35%,
+    #252116 50%,
+    #1C2028 65%,
+    #121417 100%
+  );
+  background-size: 200% 100%;
+  animation: skeletonShimmer 1.8s infinite;
+}
+
+@keyframes skeletonShimmer {
+  0% { background-position: -200% 0; }
+  100% { background-position: 200% 0; }
+}
+
+/* Diagonal Unavailable Provider Hatch */
+.hatch-unavailable {
+  background-image: repeating-linear-gradient(
+    -45deg,
+    rgba(255, 255, 255, 0.03),
+    rgba(255, 255, 255, 0.03) 6px,
+    transparent 6px,
+    transparent 12px
+  );
+}
+
+/* Reduced Motion Fallback (WCAG AAA) */
+@media (prefers-reduced-motion: reduce) {
+  *,
+  ::before,
+  ::after {
+    animation-duration: 120ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 120ms !important;
+  }
+
+  .breathe-live {
+    animation: none !important;
+    opacity: 1 !important;
+  }
 }

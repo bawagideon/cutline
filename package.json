@@ -9,7 +9,7 @@
     "start": "next start",
     "lint": "next lint",
     "type-check": "tsc --noEmit",
-    "test": "node --test --experimental-strip-types tests/crypto-vault.test.ts tests/render-provider.test.ts tests/safe-downloader.test.ts tests/worker-queue.test.ts"
+    "test": "node --test --experimental-strip-types tests/crypto-vault.test.ts tests/render-provider.test.ts tests/safe-downloader.test.ts tests/worker-queue.test.ts tests/tenant-isolation.test.ts"
   },
   "dependencies": {
     "@google/genai": "^2.13.0",

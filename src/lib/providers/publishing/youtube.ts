@@ -145,6 +145,9 @@ export class YouTubePublisher {
       .single();
 
     const currentUsed = (channel?.daily_quota_used || 0) + units;
+    if (currentUsed >= DEFAULT_DAILY_QUOTA) {
+      console.warn(`[YouTube Quota] Channel ${channelId} has reached daily quota limit (${currentUsed}/${DEFAULT_DAILY_QUOTA}).`);
+    }
     await supabase
       .from('youtube_channels')
       .update({ daily_quota_used: currentUsed, updated_at: new Date().toISOString() })

@@ -18,6 +18,7 @@ export default function IntegrationsPage() {
   const [testingConnection, setTestingConnection] = useState(false);
   const [testResult, setTestResult] = useState<string | null>(null);
   const [newKey, setNewKey] = useState('');
+  const [showFailureState, setShowFailureState] = useState(false);
 
   const integrations: IntegrationProvider[] = [
     {
@@ -224,29 +225,122 @@ export default function IntegrationsPage() {
                 />
               </div>
 
-              <div className="pt-2">
-                <button
-                  type="button"
-                  onClick={handleTestConnection}
-                  disabled={testingConnection}
-                  className="w-full border border-[#2E333D] hover:bg-[#181B20] text-xs font-medium text-white py-2.5 rounded-xl transition-colors flex items-center justify-center gap-2"
-                >
-                  {testingConnection ? (
-                    <>
-                      <div className="w-3.5 h-3.5 border-2 border-white border-t-transparent rounded-full animate-spin" />
-                      Testing connection...
-                    </>
-                  ) : (
-                    'Test connection'
-                  )}
-                </button>
-
-                {testResult && (
-                  <div className="mt-3 p-3 rounded-lg bg-[#0E2A1E] border border-[#1B4D36] text-xs font-mono text-[#34D399]">
-                    {testResult}
-                  </div>
-                )}
+              {/* Screen 31 Failure State Toggle / View */}
+              <div className="flex items-center justify-between text-xs font-mono pt-2">
+                <span className="text-[#9CA3AF]">Test simulation:</span>
+                <div className="flex gap-2">
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setTestResult(null);
+                      setShowFailureState(false);
+                    }}
+                    className={`px-2 py-0.5 rounded text-[11px] ${!showFailureState ? 'bg-[#181B20] text-white' : 'text-[#6B7280]'}`}
+                  >
+                    Healthy (Screen 18)
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setShowFailureState(true)}
+                    className={`px-2 py-0.5 rounded text-[11px] ${showFailureState ? 'bg-[#2E1419] text-[#EF4444]' : 'text-[#6B7280]'}`}
+                  >
+                    401 Failed (Screen 31)
+                  </button>
+                </div>
               </div>
+
+              {showFailureState ? (
+                /* Screen 31: Integration Test Failure Card */
+                <div className="space-y-4 pt-2">
+                  <div className="p-4 rounded-xl bg-[#2E1419] border border-[#52222B] text-xs font-mono text-[#F87171] space-y-1.5">
+                    <div className="font-semibold text-sm flex items-center gap-2">
+                      <span>⚠</span>
+                      <span>Test failed 401 Invalid API key</span>
+                    </div>
+                    <div className="text-[11px] text-[#9CA3AF]">
+                      12:44 · last good test 3d ago
+                    </div>
+                  </div>
+
+                  {/* Actionable Advice */}
+                  <div className="p-4 rounded-xl bg-[#121417] border border-[#22262E] text-xs space-y-2">
+                    <div className="font-mono text-[#9CA3AF] uppercase text-[10px] tracking-wider">
+                      TRY THIS
+                    </div>
+                    <ul className="space-y-1.5 text-[#E6E8EB] list-disc list-inside">
+                      <li>Regenerate the key in Google AI Studio</li>
+                      <li>Check the key has no trailing spaces</li>
+                      <li>Confirm billing is enabled</li>
+                    </ul>
+                  </div>
+
+                  {/* Paused Jobs Alert */}
+                  <div className="p-3 rounded-lg bg-[#2D220E] border border-[#543F15] text-xs font-mono text-[#E5A93C]">
+                    2 scripting jobs are paused until this passes.
+                  </div>
+
+                  <div>
+                    <label className="block text-xs font-mono uppercase tracking-wider text-[#9CA3AF] mb-1.5">
+                      NEW API KEY
+                    </label>
+                    <input
+                      type="password"
+                      value={newKey}
+                      onChange={(e) => setNewKey(e.target.value)}
+                      placeholder="Paste new Gemini API key..."
+                      className="w-full bg-[#121417] border border-[#22262E] focus:border-[#E5A93C] rounded-xl px-3.5 py-2.5 text-xs text-white placeholder-[#6B7280] focus:outline-none"
+                    />
+                  </div>
+
+                  <div className="flex gap-2 pt-2">
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setShowFailureState(false);
+                        setTestResult('Operational · 210ms latency');
+                      }}
+                      className="flex-1 bg-[#E5A93C] hover:bg-[#F0B84D] text-[#0B0C0E] font-semibold text-xs py-2.5 rounded-xl transition-colors"
+                    >
+                      Save and retest
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        alert('Gemini integration disabled.');
+                        setIsDrawerOpen(false);
+                      }}
+                      className="border border-[#EF4444]/60 hover:bg-[#2E1419] text-xs font-medium text-[#EF4444] px-4 py-2.5 rounded-xl transition-colors"
+                    >
+                      Disable
+                    </button>
+                  </div>
+                </div>
+              ) : (
+                /* Screen 18: Normal Test Connection */
+                <div className="pt-2">
+                  <button
+                    type="button"
+                    onClick={handleTestConnection}
+                    disabled={testingConnection}
+                    className="w-full border border-[#2E333D] hover:bg-[#181B20] text-xs font-medium text-white py-2.5 rounded-xl transition-colors flex items-center justify-center gap-2"
+                  >
+                    {testingConnection ? (
+                      <>
+                        <div className="w-3.5 h-3.5 border-2 border-white border-t-transparent rounded-full animate-spin" />
+                        Testing connection...
+                      </>
+                    ) : (
+                      'Test connection'
+                    )}
+                  </button>
+
+                  {testResult && (
+                    <div className="mt-3 p-3 rounded-lg bg-[#0E2A1E] border border-[#1B4D36] text-xs font-mono text-[#34D399]">
+                      {testResult}
+                    </div>
+                  )}
+                </div>
+              )}
             </div>
 
             <div className="pt-6 border-t border-[#1C2028] flex gap-3">

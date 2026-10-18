@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { z } from 'zod';
-import { authenticateRequest, UnauthorizedError } from '@/lib/auth/session';
+import { authenticateRequest } from '@/lib/auth/session';
 import { getSupabaseServiceClient } from '@/lib/database/client';
 import { decryptSecret } from '@/lib/crypto/vault';
 

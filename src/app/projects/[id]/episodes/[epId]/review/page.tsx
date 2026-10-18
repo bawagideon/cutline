@@ -115,13 +115,14 @@ export default function ReviewAndApprovePage() {
             <div className="flex flex-col sm:flex-row gap-3 pt-2">
               <button
                 type="button"
+                disabled={isApproved}
                 onClick={() => {
                   setIsApproved(true);
                   router.push('/publishing');
                 }}
-                className="flex-1 bg-[#E5A93C] hover:bg-[#F0B84D] text-[#0B0C0E] font-semibold text-xs py-3 rounded-xl transition-colors text-center"
+                className="flex-1 bg-[#E5A93C] hover:bg-[#F0B84D] disabled:opacity-75 text-[#0B0C0E] font-semibold text-xs py-3 rounded-xl transition-colors text-center"
               >
-                Approve and schedule
+                {isApproved ? 'Approved — Redirecting...' : 'Approve and schedule'}
               </button>
               <button
                 type="button"

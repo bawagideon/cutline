@@ -102,7 +102,7 @@ export async function GET(req: NextRequest) {
         workersHealthy: (healthyWorkersCount || 1) > 0,
       },
     });
-  } catch (err: unknown) {
+  } catch {
     return NextResponse.json({ error: 'Failed to load dashboard data.' }, { status: 500 });
   }
 }

@@ -2,10 +2,8 @@
 
 import React from 'react';
 import Link from 'next/link';
-import { useRouter } from 'next/navigation';
 
 export default function OnboardingPage() {
-  const router = useRouter();
 
   const steps = [
     {

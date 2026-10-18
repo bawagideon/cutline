@@ -29,6 +29,7 @@ export class DevMockProvider implements IRenderProvider {
 
   async submitRender(request: RenderTaskRequest): Promise<RenderTaskSubmission> {
     this.ensureAllowed();
+    void request;
 
     return {
       providerTaskId: `mock_${Date.now()}_${Math.random().toString(36).substring(2, 7)}`,

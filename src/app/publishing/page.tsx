@@ -8,6 +8,12 @@ export default function PublishingCalendarPage() {
   const [hasInterruptedUpload, setHasInterruptedUpload] = useState(true);
   const [isResuming, setIsResuming] = useState(false);
   const [resumedSuccess, setResumedSuccess] = useState(false);
+  const [isScheduleModalOpen, setIsScheduleModalOpen] = useState(false);
+  const [scheduleTitle, setScheduleTitle] = useState('The Last Danfo');
+  const [scheduleDate, setScheduleDate] = useState('Fri, Oct 23');
+  const [scheduleTime, setScheduleTime] = useState('18:00');
+  const [scheduleVisibility, setScheduleVisibility] = useState<'Private' | 'Unlisted' | 'Public'>('Unlisted');
+  const [hasAiScenes, setHasAiScenes] = useState(true);
 
   const handleResume = () => {
     setIsResuming(true);
@@ -58,6 +64,7 @@ export default function PublishingCalendarPage() {
           </div>
           <button
             type="button"
+            onClick={() => setIsScheduleModalOpen(true)}
             className="bg-[#E5A93C] hover:bg-[#F0B84D] text-[#0B0C0E] font-semibold text-xs px-4 py-2 rounded-lg transition-colors"
           >
             Schedule release
@@ -160,6 +167,136 @@ export default function PublishingCalendarPage() {
           </div>
         ))}
       </div>
+
+      {/* Screen 37: Publishing Schedule Modal Dialog */}
+      {isScheduleModalOpen && (
+        <div className="fixed inset-0 bg-black/70 backdrop-blur-sm z-50 flex items-center justify-center p-4">
+          <div className="bg-[#121417] border border-[#2E333D] rounded-2xl max-w-lg w-full p-6 md:p-8 space-y-6 shadow-2xl">
+            <div className="flex items-center justify-between pb-3 border-b border-[#1C2028]">
+              <div>
+                <h3 className="text-lg font-bold text-white">
+                  Schedule EP 07
+                </h3>
+                <p className="text-xs font-mono text-[#9CA3AF] mt-0.5">
+                  Lagos After Dark · Publishing Times in Africa/Lagos
+                </p>
+              </div>
+              <button
+                type="button"
+                onClick={() => setIsScheduleModalOpen(false)}
+                className="text-[#9CA3AF] hover:text-white"
+              >
+                ✕
+              </button>
+            </div>
+
+            <div className="space-y-4">
+              <div>
+                <label className="block text-xs font-mono uppercase tracking-wider text-[#9CA3AF] mb-1.5">
+                  Title
+                </label>
+                <input
+                  type="text"
+                  value={scheduleTitle}
+                  onChange={(e) => setScheduleTitle(e.target.value)}
+                  className="w-full bg-[#0B0C0E] border border-[#22262E] focus:border-[#E5A93C] rounded-xl px-4 py-2.5 text-sm text-white focus:outline-none"
+                />
+              </div>
+
+              <div className="grid grid-cols-2 gap-4">
+                <div>
+                  <label className="block text-xs font-mono uppercase tracking-wider text-[#9CA3AF] mb-1.5">
+                    Date
+                  </label>
+                  <input
+                    type="text"
+                    value={scheduleDate}
+                    onChange={(e) => setScheduleDate(e.target.value)}
+                    className="w-full bg-[#0B0C0E] border border-[#22262E] focus:border-[#E5A93C] rounded-xl px-4 py-2.5 text-sm text-white focus:outline-none font-mono"
+                  />
+                </div>
+                <div>
+                  <label className="block text-xs font-mono uppercase tracking-wider text-[#9CA3AF] mb-1.5">
+                    Time (WAT)
+                  </label>
+                  <input
+                    type="text"
+                    value={scheduleTime}
+                    onChange={(e) => setScheduleTime(e.target.value)}
+                    className="w-full bg-[#0B0C0E] border border-[#22262E] focus:border-[#E5A93C] rounded-xl px-4 py-2.5 text-sm text-white focus:outline-none font-mono"
+                  />
+                </div>
+              </div>
+
+              {/* Visibility Options */}
+              <div>
+                <label className="block text-xs font-mono uppercase tracking-wider text-[#9CA3AF] mb-1.5">
+                  Visibility
+                </label>
+                <div className="flex gap-2">
+                  {(['Private', 'Unlisted', 'Public'] as const).map((vis) => (
+                    <button
+                      key={vis}
+                      type="button"
+                      onClick={() => setScheduleVisibility(vis)}
+                      className={`flex-1 py-2 rounded-xl text-xs font-medium transition-all ${
+                        scheduleVisibility === vis
+                          ? 'bg-[#E5A93C] text-[#0B0C0E] font-semibold'
+                          : 'bg-[#0B0C0E] border border-[#22262E] text-[#9CA3AF] hover:text-white'
+                      }`}
+                    >
+                      {vis}
+                    </button>
+                  ))}
+                </div>
+              </div>
+
+              {/* AI Disclosure Checkbox */}
+              <div className="pt-2">
+                <label className="flex items-start gap-3 text-xs text-white cursor-pointer p-3 bg-[#0B0C0E] border border-[#22262E] rounded-xl">
+                  <input
+                    type="checkbox"
+                    checked={hasAiScenes}
+                    onChange={(e) => setHasAiScenes(e.target.checked)}
+                    className="accent-[#E5A93C] w-4 h-4 rounded mt-0.5"
+                  />
+                  <div>
+                    <div className="font-medium">Contains realistic AI-generated scenes</div>
+                    <div className="text-[11px] text-[#9CA3AF] mt-0.5">
+                      Complies with YouTube synthesized or altered content disclosure rules.
+                    </div>
+                  </div>
+                </label>
+              </div>
+
+              {/* Approval Notice */}
+              <div className="text-xs text-[#9CA3AF] font-mono">
+                Public release needs your explicit approval.
+              </div>
+            </div>
+
+            <div className="pt-4 border-t border-[#1C2028] flex gap-3">
+              <button
+                type="button"
+                onClick={() => setIsScheduleModalOpen(false)}
+                className="flex-1 border border-[#2E333D] hover:bg-[#181B20] text-xs font-medium text-white py-2.5 rounded-xl transition-colors"
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                onClick={() => {
+                  alert(`EP 07 scheduled for release on ${scheduleDate} at ${scheduleTime} WAT (${scheduleVisibility})`);
+                  setIsScheduleModalOpen(false);
+                }}
+                className="flex-1 bg-[#E5A93C] hover:bg-[#F0B84D] text-[#0B0C0E] font-semibold text-xs py-2.5 rounded-xl transition-colors"
+              >
+                Approve and schedule
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </StudioLayout>
   );
 }

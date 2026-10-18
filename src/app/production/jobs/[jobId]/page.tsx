@@ -4,7 +4,6 @@ import React, { useState } from 'react';
 import Link from 'next/link';
 import { useParams } from 'next/navigation';
 import { StudioLayout } from '@/components/layout/StudioLayout';
-import { StatusPill } from '@/components/ui/StatusPill';
 
 export default function JobTimelinePage() {
   const params = useParams();

@@ -17,6 +17,7 @@ export function Sidebar() {
     { label: 'Analytics', href: '/analytics' },
     { label: 'Integrations', href: '/integrations' },
     { label: 'Usage', href: '/usage' },
+    { label: 'Settings', href: '/settings' },
   ];
 
   return (

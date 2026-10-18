@@ -70,6 +70,9 @@ export function decryptSecret(serializedPayload: string): string {
 
   const iv = Buffer.from(payload.iv, 'base64');
   const tag = Buffer.from(payload.tag, 'base64');
+  if (tag.length !== AUTH_TAG_LENGTH) {
+    throw new Error('[VAULT ERROR] Invalid auth tag length.');
+  }
   const decipher = crypto.createDecipheriv(ALGORITHM, masterKey, iv);
   decipher.setAuthTag(tag);
 

@@ -25,10 +25,12 @@ export class UnimplementedRenderProvider implements IRenderProvider {
   }
 
   async submitRender(_request: RenderTaskRequest): Promise<RenderTaskSubmission> {
+    void _request;
     throw new UnimplementedProviderError(this.capabilities.displayName);
   }
 
   async checkStatus(_providerTaskId: string): Promise<RenderTaskStatus> {
+    void _providerTaskId;
     throw new UnimplementedProviderError(this.capabilities.displayName);
   }
 }

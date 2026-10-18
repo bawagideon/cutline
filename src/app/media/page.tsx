@@ -2,7 +2,6 @@
 
 import React, { useState } from 'react';
 import { StudioLayout } from '@/components/layout/StudioLayout';
-import { StatusPill } from '@/components/ui/StatusPill';
 
 interface MediaItem {
   id: string;

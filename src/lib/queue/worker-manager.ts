@@ -145,18 +145,48 @@ export class WorkerManager {
 
     try {
       if (job.stage === 'started') {
-        // Idempotency check: If provider_task_id is already present, advance immediately to avoid re-billing
+        // Idempotency check 1: If provider_task_id is already present, advance immediately to avoid re-billing
         if (job.provider_task_id) {
           await this.logJobEvent(job.id, 'warn', `Job was already submitted (task=${job.provider_task_id}); advancing to waiting_for_provider`);
           const { error: advanceError } = await supabase
             .from('production_jobs')
             .update({
               stage: 'waiting_for_provider',
+              error_message: null,
               updated_at: new Date().toISOString(),
             })
             .eq('id', job.id);
           if (advanceError) {
             throw new Error(`Failed to advance job stage: ${advanceError.message}`);
+          }
+          return;
+        }
+
+        // Idempotency check 2: Ambiguous Submission Recovery Guard
+        // If error_message indicates SUBMITTING_RENDER without provider_task_id, a previous worker crashed
+        // mid-flight during the paid provider call. Since provider API does not guarantee deduplicated lookup,
+        // AUTOMATIC RESUBMISSION IS PROHIBITED to prevent double billing.
+        if (job.error_message === 'SUBMITTING_RENDER') {
+          const ambiguousError = `Ambiguous render submission: Previous worker crashed while submitting render to ${job.provider}. Automatic resubmission blocked to prevent duplicate billing. Manual reconciliation required.`;
+          await this.logJobEvent(job.id, 'error', ambiguousError, {
+            idempotencyKey: job.idempotency_key,
+            attempt: job.attempt,
+          });
+
+          // Transition job to 'failed' with explicit cause to prevent duplicate spend
+          const { error: haltError } = await supabase
+            .from('production_jobs')
+            .update({
+              stage: 'failed',
+              error_message: ambiguousError,
+              locked_by: null,
+              locked_until: null,
+              updated_at: new Date().toISOString(),
+            })
+            .eq('id', job.id);
+
+          if (haltError) {
+            throw new Error(`Failed to record ambiguous submission halt: ${haltError.message}`);
           }
           return;
         }

@@ -66,4 +66,31 @@ describe('Render Provider Pipeline & Duration Limits', () => {
       if (originalAllow) process.env.ALLOW_DEV_MOCK_RENDER = originalAllow;
     }
   });
+
+  it('verifies PixVerse render returns honest estimated cost provenance', async () => {
+    const { PixVerseProvider } = await import('../src/lib/providers/render/pixverse.ts');
+    const pixverse = new PixVerseProvider();
+
+    // Mock fetch for PixVerse OpenAPI
+    const originalFetch = globalThis.fetch;
+    try {
+      globalThis.fetch = async () =>
+        new Response(JSON.stringify({ Resp: { video_id: 'pix-task-test-123' } }), {
+          status: 200,
+          headers: { 'Content-Type': 'application/json' },
+        });
+
+      const submission = await pixverse.submitRender(
+        { prompt: 'cinematic shot', durationSec: 5, aspectRatio: '16:9' },
+        'test-key-123'
+      );
+
+      assert.equal(submission.providerTaskId, 'pix-task-test-123');
+      assert.equal(submission.costUsd, 0.12);
+      assert.equal(submission.costType, 'estimated', 'PixVerse cost MUST be labeled estimated, not provider-reported');
+      assert.notEqual(submission.costType, 'provider-reported', 'Rate-card assumptions cannot be labeled provider-reported');
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+  });
 });

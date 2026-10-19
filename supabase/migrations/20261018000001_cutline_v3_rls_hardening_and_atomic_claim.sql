@@ -14,21 +14,22 @@ BEGIN
 END;
 $$ LANGUAGE plpgsql SECURITY DEFINER SET search_path = public, pg_temp;
 
--- 2. CREATE NON-RECURSIVE SECURITY DEFINER ROLE CHECK HELPER
-CREATE OR REPLACE FUNCTION public.is_workspace_admin_or_owner(
-    p_workspace_id UUID,
-    p_user_id UUID
+-- 2. CREATE NON-RECURSIVE SECURITY DEFINER ROLE CHECK HELPER (CLIENT SAFE)
+CREATE OR REPLACE FUNCTION public.is_current_user_workspace_admin_or_owner(
+    p_workspace_id UUID
 )
 RETURNS BOOLEAN AS $$
+DECLARE
+    v_caller_id UUID := auth.uid();
 BEGIN
-    IF p_workspace_id IS NULL OR p_user_id IS NULL THEN
+    IF p_workspace_id IS NULL OR v_caller_id IS NULL THEN
         RETURN FALSE;
     END IF;
 
     RETURN EXISTS (
         SELECT 1 FROM public.workspace_members
         WHERE workspace_id = p_workspace_id
-          AND user_id = p_user_id
+          AND user_id = v_caller_id
           AND role IN ('owner', 'admin')
     );
 END;
@@ -65,7 +66,7 @@ BEGIN
     ) THEN
         CREATE POLICY workspace_members_authorized_insert ON public.workspace_members
             FOR INSERT
-            WITH CHECK (public.is_workspace_admin_or_owner(workspace_id, auth.uid()));
+            WITH CHECK (public.is_current_user_workspace_admin_or_owner(workspace_id));
     END IF;
 END $$;
 

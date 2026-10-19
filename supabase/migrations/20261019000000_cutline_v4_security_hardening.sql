@@ -2,9 +2,9 @@
 -- CUTLINE STUDIO: V4 SECURITY HARDENING & RPC AUTHORIZATION LOCKDOWN
 -- Fixes:
 -- 1. Eliminates workspace self-join vulnerability and RLS infinite recursion (P0)
--- 2. Explicitly revokes claim_next_production_job from PUBLIC/anon/authenticated (P0)
--- 3. Locks down provision_workspace_for_user strictly to service_role (P0)
--- 4. Introduces safe is_workspace_admin_or_owner SECURITY DEFINER helper
+-- 2. Closes membership oracle: Derives caller strictly from auth.uid() in helper
+-- 3. Explicitly revokes claim_next_production_job from PUBLIC/anon/authenticated (P0)
+-- 4. Locks down provision_workspace_for_user strictly to service_role (P0)
 -- 5. Implements claim fencing and lease recovery in claim_next_production_job
 -- ==============================================================================
 
@@ -12,9 +12,8 @@
 DROP POLICY IF EXISTS workspace_members_self_insert ON public.workspace_members;
 DROP POLICY IF EXISTS workspace_members_authorized_insert ON public.workspace_members;
 
--- 2. CREATE NON-RECURSIVE SECURITY DEFINER ROLE CHECK HELPER
--- Using a SECURITY DEFINER function with a fixed search path executes as the table owner,
--- preventing PostgreSQL from triggering recursive policy evaluation on public.workspace_members.
+-- 2. PRIVILEGED SERVER-SIDE ROLE CHECK HELPER (SERVICE ROLE ONLY)
+-- Restrict two-parameter version strictly to service_role to eliminate membership oracle.
 CREATE OR REPLACE FUNCTION public.is_workspace_admin_or_owner(
     p_workspace_id UUID,
     p_user_id UUID
@@ -36,16 +35,43 @@ $$ LANGUAGE plpgsql SECURITY DEFINER SET search_path = public, pg_temp;
 
 REVOKE ALL ON FUNCTION public.is_workspace_admin_or_owner(UUID, UUID) FROM PUBLIC;
 REVOKE ALL ON FUNCTION public.is_workspace_admin_or_owner(UUID, UUID) FROM anon;
-GRANT EXECUTE ON FUNCTION public.is_workspace_admin_or_owner(UUID, UUID) TO authenticated, service_role;
+REVOKE ALL ON FUNCTION public.is_workspace_admin_or_owner(UUID, UUID) FROM authenticated;
+GRANT EXECUTE ON FUNCTION public.is_workspace_admin_or_owner(UUID, UUID) TO service_role;
 
--- 3. RESTRICT WORKSPACE MEMBER INSERTION VIA NON-RECURSIVE POLICY
+-- 3. CLIENT-SAFE SECURITY DEFINER ROLE CHECK HELPER (CALLER IDENTITY PINNED TO auth.uid())
+-- Eliminates membership oracle by strictly preventing arbitrary user identity probing.
+CREATE OR REPLACE FUNCTION public.is_current_user_workspace_admin_or_owner(
+    p_workspace_id UUID
+)
+RETURNS BOOLEAN AS $$
+DECLARE
+    v_caller_id UUID := auth.uid();
+BEGIN
+    IF p_workspace_id IS NULL OR v_caller_id IS NULL THEN
+        RETURN FALSE;
+    END IF;
+
+    RETURN EXISTS (
+        SELECT 1 FROM public.workspace_members
+        WHERE workspace_id = p_workspace_id
+          AND user_id = v_caller_id
+          AND role IN ('owner', 'admin')
+    );
+END;
+$$ LANGUAGE plpgsql SECURITY DEFINER SET search_path = public, pg_temp;
+
+REVOKE ALL ON FUNCTION public.is_current_user_workspace_admin_or_owner(UUID) FROM PUBLIC;
+REVOKE ALL ON FUNCTION public.is_current_user_workspace_admin_or_owner(UUID) FROM anon;
+GRANT EXECUTE ON FUNCTION public.is_current_user_workspace_admin_or_owner(UUID) TO authenticated, service_role;
+
+-- 4. RESTRICT WORKSPACE MEMBER INSERTION VIA NON-RECURSIVE CLIENT-SAFE POLICY
 CREATE POLICY workspace_members_authorized_insert ON public.workspace_members
     FOR INSERT
     WITH CHECK (
-        public.is_workspace_admin_or_owner(workspace_id, auth.uid())
+        public.is_current_user_workspace_admin_or_owner(workspace_id)
     );
 
--- 4. ATOMIC WORKSPACE PROVISIONING RPC (SERVICE ROLE ONLY)
+-- 5. ATOMIC WORKSPACE PROVISIONING RPC (SERVICE ROLE ONLY)
 -- Accepts caller identity ONLY when executed by the trusted server-side service_role.
 -- Plain authenticated clients CANNOT execute this RPC with arbitrary identities.
 CREATE OR REPLACE FUNCTION public.provision_workspace_for_user(
@@ -92,7 +118,7 @@ REVOKE ALL ON FUNCTION public.provision_workspace_for_user(UUID, TEXT) FROM auth
 -- Grant strictly and exclusively to service_role
 GRANT EXECUTE ON FUNCTION public.provision_workspace_for_user(UUID, TEXT) TO service_role;
 
--- 5. CLIENT-FACING PROVISIONING FUNCTION (DERIVES IDENTITY SOLELY FROM auth.uid())
+-- 6. CLIENT-FACING PROVISIONING FUNCTION (DERIVES IDENTITY SOLELY FROM auth.uid())
 -- Authenticated users can only provision a workspace for THEMSELVES. No arbitrary identity allowed.
 CREATE OR REPLACE FUNCTION public.provision_my_workspace(
     p_workspace_name TEXT DEFAULT 'Personal Studio'
@@ -113,7 +139,7 @@ REVOKE ALL ON FUNCTION public.provision_my_workspace(TEXT) FROM PUBLIC;
 REVOKE ALL ON FUNCTION public.provision_my_workspace(TEXT) FROM anon;
 GRANT EXECUTE ON FUNCTION public.provision_my_workspace(TEXT) TO authenticated, service_role;
 
--- 6. ATOMIC WORKER CLAIM FUNCTION WITH FOR UPDATE SKIP LOCKED & FENCING TOKENS
+-- 7. ATOMIC WORKER CLAIM FUNCTION WITH FOR UPDATE SKIP LOCKED & FENCING TOKENS
 CREATE OR REPLACE FUNCTION public.claim_next_production_job(
     p_worker_id TEXT,
     p_lease_sec INT

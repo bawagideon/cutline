@@ -64,8 +64,8 @@ export class PixVerseProvider implements IRenderProvider {
       providerTaskId: String(taskId),
       provider: 'pixverse',
       status: 'submitted',
-      costUsd: 0.12, // Standard PixVerse render credit cost
-      costType: 'provider-reported',
+      costUsd: 0.12, // Standard PixVerse render credit estimate (rate card based, not settled billing event)
+      costType: 'estimated',
       isMock: false,
     };
   }

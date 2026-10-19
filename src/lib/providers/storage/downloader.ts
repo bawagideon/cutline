@@ -175,8 +175,21 @@ export async function downloadAndStoreMedia(
     let headerBuffer = Buffer.alloc(0);
     let validatedSignature = false;
 
+    // Proactively track filesystem write errors
+    let writeStreamError: Error | null = null;
+    const onStreamError = (err: Error) => {
+      writeStreamError = err;
+    };
+    fileWriteStream.on('error', onStreamError);
+
     try {
       while (true) {
+        const currentWriteErr = writeStreamError as Error | null;
+        if (currentWriteErr) {
+          reader.cancel().catch(() => {});
+          throw new MediaSecurityError(`Filesystem write error: ${currentWriteErr.message}`);
+        }
+
         const { done, value } = await reader.read();
         if (done) break;
         if (value) {
@@ -201,7 +214,22 @@ export async function downloadAndStoreMedia(
           hasher.update(value);
           const writeOk = fileWriteStream.write(Buffer.from(value));
           if (!writeOk) {
-            await new Promise<void>((resolve) => fileWriteStream.once('drain', () => resolve()));
+            await new Promise<void>((resolve, reject) => {
+              const onDrain = () => {
+                cleanup();
+                resolve();
+              };
+              const onError = (err: Error) => {
+                cleanup();
+                reject(new MediaSecurityError(`Filesystem error during write stream drain: ${err.message}`));
+              };
+              const cleanup = () => {
+                fileWriteStream.off('drain', onDrain);
+                fileWriteStream.off('error', onError);
+              };
+              fileWriteStream.once('drain', onDrain);
+              fileWriteStream.once('error', onError);
+            });
           }
         }
       }
@@ -214,11 +242,22 @@ export async function downloadAndStoreMedia(
         validatedSignature = true;
       }
     } finally {
+      // Ensure file write stream is properly ended or destroyed
       await new Promise<void>((resolve, reject) => {
+        if (fileWriteStream.destroyed) {
+          return resolve();
+        }
         fileWriteStream.end((err?: Error | null) => {
-          if (err) reject(err);
-          else resolve();
+          const closeErr = (err || writeStreamError) as Error | null;
+          if (closeErr) {
+            reject(new MediaSecurityError(`Failed closing media write stream: ${closeErr.message}`));
+          } else {
+            resolve();
+          }
         });
+      }).catch((err) => {
+        fileWriteStream.destroy();
+        throw err;
       });
     }
 

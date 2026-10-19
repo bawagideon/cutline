@@ -1,4 +1,5 @@
 import { clerkMiddleware, createRouteMatcher } from '@clerk/nextjs/server';
+import { NextResponse } from 'next/server';
 
 const isPublicRoute = createRouteMatcher([
   '/',
@@ -15,10 +16,29 @@ const isPublicRoute = createRouteMatcher([
 ]);
 
 export default clerkMiddleware(async (auth, request) => {
-  // Enforce auth protection when Clerk secret key is configured
-  if (process.env.CLERK_SECRET_KEY && !isPublicRoute(request)) {
-    await auth.protect();
+  // 1. Allow intentionally public routes
+  if (isPublicRoute(request)) {
+    return NextResponse.next();
   }
+
+  const isProduction = process.env.NODE_ENV === 'production' || Boolean(process.env.VERCEL);
+
+  // 2. Fail-closed in production if Clerk Secret Key is unconfigured
+  if (isProduction && !process.env.CLERK_SECRET_KEY) {
+    if (request.nextUrl.pathname.startsWith('/api/')) {
+      return NextResponse.json(
+        { error: 'Server authentication configuration missing (CLERK_SECRET_KEY required in production).' },
+        { status: 401 }
+      );
+    }
+    const signInUrl = new URL('/sign-in', request.url);
+    signInUrl.searchParams.set('error', 'auth_unconfigured');
+    return NextResponse.redirect(signInUrl);
+  }
+
+  // 3. Strictly protect private application routes
+  await auth.protect();
+  return NextResponse.next();
 });
 
 export const config = {

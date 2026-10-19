@@ -17,12 +17,27 @@ export default function ProfileSettingsPage() {
       setDisplayName(user.fullName || user.firstName || 'Creator');
       setEmail(user.primaryEmailAddress?.emailAddress || '');
     }
+    // Load persisted local preferences
+    try {
+      const savedTz = localStorage.getItem('cutline_timezone');
+      if (savedTz) setTimezone(savedTz);
+      const savedTheme = localStorage.getItem('cutline_theme') as 'Dark' | 'Light' | 'System' | null;
+      if (savedTheme) setTheme(savedTheme);
+    } catch {
+      // Storage access blocked or restricted
+    }
   }, [user]);
 
   const handleSave = (e: React.FormEvent) => {
     e.preventDefault();
-    setSaved(true);
-    setTimeout(() => setSaved(false), 2500);
+    try {
+      localStorage.setItem('cutline_timezone', timezone);
+      localStorage.setItem('cutline_theme', theme);
+      setSaved(true);
+      setTimeout(() => setSaved(false), 2500);
+    } catch {
+      // Handle storage quota or restriction
+    }
   };
 
   const avatarLetter = displayName ? displayName.charAt(0).toUpperCase() : 'C';
@@ -47,39 +62,49 @@ export default function ProfileSettingsPage() {
         <div>
           <div className="text-sm font-semibold text-white">{displayName || 'Creator'}</div>
           <p className="text-[11px] font-mono text-[#6B7280] mt-0.5">
-            Managed via Clerk Authentication
+            Identity managed by Clerk Authentication
           </p>
         </div>
       </div>
 
       <form onSubmit={handleSave} className="space-y-5">
         <div>
-          <label className="block text-xs font-mono uppercase tracking-wider text-[#9CA3AF] mb-1.5">
-            Display Name
-          </label>
+          <div className="flex items-center justify-between mb-1.5">
+            <label className="text-xs font-mono uppercase tracking-wider text-[#9CA3AF]">
+              Display Name
+            </label>
+            <span className="text-[10px] font-mono text-[#E5A93C] bg-[#E5A93C]/10 px-2 py-0.5 rounded">
+              Managed by Clerk
+            </span>
+          </div>
           <input
             type="text"
             value={displayName}
-            onChange={(e) => setDisplayName(e.target.value)}
-            className="w-full bg-[#0B0C0E] border border-[#22262E] focus:border-[#E5A93C] rounded-xl px-4 py-2.5 text-sm text-white focus:outline-none"
+            readOnly
+            className="w-full bg-[#0E1013] border border-[#22262E] text-[#9CA3AF] rounded-xl px-4 py-2.5 text-sm cursor-not-allowed focus:outline-none font-mono"
           />
         </div>
 
         <div>
-          <label className="block text-xs font-mono uppercase tracking-wider text-[#9CA3AF] mb-1.5">
-            Email
-          </label>
+          <div className="flex items-center justify-between mb-1.5">
+            <label className="text-xs font-mono uppercase tracking-wider text-[#9CA3AF]">
+              Email Address
+            </label>
+            <span className="text-[10px] font-mono text-[#E5A93C] bg-[#E5A93C]/10 px-2 py-0.5 rounded">
+              Managed by Clerk
+            </span>
+          </div>
           <input
             type="email"
             value={email}
-            onChange={(e) => setEmail(e.target.value)}
-            className="w-full bg-[#0B0C0E] border border-[#22262E] focus:border-[#E5A93C] rounded-xl px-4 py-2.5 text-sm text-white focus:outline-none"
+            readOnly
+            className="w-full bg-[#0E1013] border border-[#22262E] text-[#9CA3AF] rounded-xl px-4 py-2.5 text-sm cursor-not-allowed focus:outline-none font-mono"
           />
         </div>
 
         <div>
           <label className="block text-xs font-mono uppercase tracking-wider text-[#9CA3AF] mb-1.5">
-            Timezone
+            Timezone Preference
           </label>
           <select
             value={timezone}
@@ -107,7 +132,7 @@ export default function ProfileSettingsPage() {
                 onClick={() => setTheme(t)}
                 className={`flex-1 py-2 rounded-xl text-xs font-medium transition-all ${
                   theme === t
-                    ? 'bg-[#E5A93C] text-[#0B0C0E] font-semibold'
+                    ? 'bg-[#E5A93C] text-[#0B0C0E] font-semibold shadow-sm'
                     : 'bg-[#0B0C0E] border border-[#22262E] text-[#9CA3AF] hover:text-white'
                 }`}
               >
@@ -119,13 +144,13 @@ export default function ProfileSettingsPage() {
 
         <div className="pt-4 border-t border-[#1C2028] flex items-center justify-between">
           <span className="text-xs font-mono text-[#34D399]">
-            {saved ? '✓ Profile saved' : ''}
+            {saved ? '✓ Studio preferences saved' : ''}
           </span>
           <button
             type="submit"
-            className="bg-[#E5A93C] hover:bg-[#F0B84D] text-[#0B0C0E] font-semibold text-xs px-6 py-2.5 rounded-xl transition-colors"
+            className="bg-[#E5A93C] hover:bg-[#F0B84D] text-[#0B0C0E] font-semibold text-xs px-6 py-2.5 rounded-xl transition-colors btn-press shadow-sm"
           >
-            Save
+            Save Preferences
           </button>
         </div>
       </form>

@@ -41,11 +41,18 @@ BEGIN
 
     IF NOT EXISTS (
         SELECT 1 FROM pg_policies 
-        WHERE tablename = 'workspace_members' AND policyname = 'workspace_members_self_insert'
+        WHERE tablename = 'workspace_members' AND policyname = 'workspace_members_authorized_insert'
     ) THEN
-        CREATE POLICY workspace_members_self_insert ON workspace_members
+        CREATE POLICY workspace_members_authorized_insert ON workspace_members
             FOR INSERT
-            WITH CHECK (user_id = auth.uid() OR user_in_workspace(workspace_id));
+            WITH CHECK (
+                EXISTS (
+                    SELECT 1 FROM workspace_members existing
+                    WHERE existing.workspace_id = workspace_members.workspace_id
+                      AND existing.user_id = auth.uid()
+                      AND existing.role IN ('owner', 'admin')
+                )
+            );
     END IF;
 END $$;
 
@@ -100,3 +107,10 @@ BEGIN
     RETURNING *;
 END;
 $$ LANGUAGE plpgsql SECURITY DEFINER SET search_path = public, pg_temp;
+
+-- 6. EXPLICIT PRIVILEGE AUDIT & RESTRICTIONS ON WORKER RPC
+REVOKE ALL ON FUNCTION claim_next_production_job(TEXT, INT) FROM PUBLIC;
+REVOKE ALL ON FUNCTION claim_next_production_job(TEXT, INT) FROM anon;
+REVOKE ALL ON FUNCTION claim_next_production_job(TEXT, INT) FROM authenticated;
+GRANT EXECUTE ON FUNCTION claim_next_production_job(TEXT, INT) TO service_role;
+

@@ -1,6 +1,6 @@
 'use client';
 
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useCallback } from 'react';
 import Link from 'next/link';
 import { StudioLayout } from '@/components/layout/StudioLayout';
 import { StatusPill } from '@/components/ui/StatusPill';
@@ -23,6 +23,7 @@ export default function ProjectsPage() {
   const [scrubFrames, setScrubFrames] = useState<Record<string, number>>({});
   const [projects, setProjects] = useState<ProjectItem[]>([]);
   const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
 
   interface ProjectApiRecord {
     id: string;
@@ -33,37 +34,44 @@ export default function ProjectsPage() {
     status?: string;
   }
 
-  useEffect(() => {
-    async function loadProjects() {
-      try {
-        const res = await fetch('/api/projects');
-        if (res.ok) {
-          const json = await res.json();
-          if (json.projects && json.projects.length > 0) {
-            setProjects(
-              json.projects.map((p: ProjectApiRecord) => ({
-                id: p.id,
-                name: p.name,
-                category: p.category || 'Documentary',
-                episodesCount: p.episodes?.[0]?.count || 0,
-                format: p.format || '16:9',
-                status: p.status || 'Active',
-                color: 'from-amber-950/40 to-slate-900',
-                frames: ['Script Outline', 'Scene Planning', 'Render Pipeline', 'Review Gate'],
-              }))
-            );
-          } else {
-            setProjects([]);
-          }
-        }
-      } catch {
-        setProjects([]);
-      } finally {
-        setLoading(false);
+  const loadProjects = useCallback(async () => {
+    setLoading(true);
+    setError(null);
+    try {
+      const res = await fetch('/api/projects');
+      if (!res.ok) {
+        const errJson = await res.json().catch(() => ({}));
+        throw new Error(errJson.error || `HTTP ${res.status}: Failed to load projects`);
       }
+      const json = await res.json();
+      if (json.projects && json.projects.length > 0) {
+        setProjects(
+          json.projects.map((p: ProjectApiRecord) => ({
+            id: p.id,
+            name: p.name,
+            category: p.category || 'Documentary',
+            episodesCount: p.episodes?.[0]?.count || 0,
+            format: p.format || '16:9',
+            status: p.status || 'Active',
+            color: 'from-amber-950/40 to-slate-900',
+            frames: ['Script Outline', 'Scene Planning', 'Render Pipeline', 'Review Gate'],
+          }))
+        );
+      } else {
+        setProjects([]);
+      }
+    } catch (err: unknown) {
+      const msg = err instanceof Error ? err.message : 'Database connection error';
+      setError(msg);
+      setProjects([]);
+    } finally {
+      setLoading(false);
     }
-    loadProjects();
   }, []);
+
+  useEffect(() => {
+    loadProjects();
+  }, [loadProjects]);
 
   const filtered = projects.filter((p) => {
     const matchesFilter = filter === 'All' ? true : p.status === filter;
@@ -93,6 +101,21 @@ export default function ProjectsPage() {
           </Link>
         </div>
       </div>
+
+      {error && (
+        <div className="mb-6 p-4 rounded-xl bg-red-950/40 border border-red-500/40 text-red-200 text-xs flex items-center justify-between gap-4 font-mono cut-in">
+          <div>
+            <span className="font-semibold text-red-400">Database Connection Error:</span> {error}
+          </div>
+          <button
+            type="button"
+            onClick={() => loadProjects()}
+            className="px-3 py-1 bg-red-500/20 hover:bg-red-500/40 border border-red-500/40 rounded-lg text-white font-medium transition-colors"
+          >
+            Retry
+          </button>
+        </div>
+      )}
 
       {/* Filter and View Controls Bar */}
       <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 mb-6">

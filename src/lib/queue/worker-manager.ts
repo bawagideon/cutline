@@ -139,6 +139,19 @@ export class WorkerManager {
 
     try {
       if (job.stage === 'started') {
+        // Idempotency check: If provider_task_id is already present, skip duplicate paid submission
+        if (job.provider_task_id) {
+          await this.logJobEvent(job.id, 'warn', `Job was already submitted (task=${job.provider_task_id}); transitioning to waiting_for_provider`);
+          await supabase
+            .from('production_jobs')
+            .update({
+              stage: 'waiting_for_provider',
+              updated_at: new Date().toISOString(),
+            })
+            .eq('id', job.id);
+          return;
+        }
+
         // Fetch scene details
         const { data: scene } = await supabase.from('scenes').select('*').eq('id', job.scene_id).single();
         if (!scene) {
@@ -147,6 +160,7 @@ export class WorkerManager {
 
         await this.logJobEvent(job.id, 'info', `Submitting render to ${job.provider}`, {
           durationSec: scene.duration_sec,
+          idempotencyKey: job.idempotency_key,
         });
 
         const submission = await renderManager.submitRender(job.provider, {

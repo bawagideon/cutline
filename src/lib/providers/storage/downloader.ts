@@ -131,10 +131,12 @@ export async function downloadAndStoreMedia(
 
     const contentType = finalResponse.headers.get('content-type') || 'video/mp4';
 
-    // Stream chunks with running byte counter to prevent memory exhaustion
+    // Stream chunks with running byte counter and streaming hash computation
     const reader = finalResponse.body.getReader();
     const chunks: Uint8Array[] = [];
     let receivedBytes = 0;
+    const hasher = crypto.createHash('sha256');
+    let validatedSignature = false;
 
     while (true) {
       const { done, value } = await reader.read();
@@ -145,14 +147,30 @@ export async function downloadAndStoreMedia(
           reader.cancel().catch(() => {});
           throw new MediaSecurityError(`Streamed media exceeded maximum safety ceiling of ${MAX_FILE_SIZE_BYTES} bytes.`);
         }
+
+        // Validate media magic bytes from initial chunk
+        if (!validatedSignature && receivedBytes >= 8) {
+          const sample = Buffer.from(value);
+          // Check for MP4 ftyp / ISO box or WebM header
+          const isFtyp = sample.length >= 8 && sample.slice(4, 8).toString('ascii') === 'ftyp';
+          const isWebm = sample.length >= 4 && sample[0] === 0x1a && sample[1] === 0x45 && sample[2] === 0xdf && sample[3] === 0xa3;
+          const isMoov = sample.length >= 8 && sample.slice(4, 8).toString('ascii') === 'moov';
+
+          // If content-type claimed video/mp4 or webm, verify magic bytes
+          if (!isFtyp && !isWebm && !isMoov && (contentType.includes('video') || contentType.includes('mp4'))) {
+            reader.cancel().catch(() => {});
+            throw new MediaSecurityError('Invalid media format: Header does not match recognized video signatures.');
+          }
+          validatedSignature = true;
+        }
+
+        hasher.update(value);
         chunks.push(value);
       }
     }
 
     const buffer = Buffer.concat(chunks);
-
-    // Compute SHA-256 integrity hash
-    const hash = crypto.createHash('sha256').update(buffer).digest('hex');
+    const hash = hasher.digest('hex');
 
     // Upload to Supabase Storage
     const hasLiveSupabase = Boolean(

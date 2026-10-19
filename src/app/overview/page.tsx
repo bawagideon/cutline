@@ -1,6 +1,6 @@
 'use client';
 
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useCallback } from 'react';
 import Link from 'next/link';
 import { useUser } from '@clerk/nextjs';
 import { StudioLayout } from '@/components/layout/StudioLayout';
@@ -58,34 +58,76 @@ export default function OverviewPage() {
   const [attentionItems, setAttentionItems] = useState<AttentionItem[]>([]);
   const [processingNow, setProcessingNow] = useState<ProcessingJob[]>([]);
   const [upcoming, setUpcoming] = useState<UpcomingEpisode[]>([]);
-  const [connections, setConnections] = useState<{ youtubeToken: string; pixverse: string }>({
+  const [error, setError] = useState<string | null>(null);
+  const [loading, setLoading] = useState(true);
+  const [hasProjects, setHasProjects] = useState(false);
+  const [workspaceProvisioned, setWorkspaceProvisioned] = useState(false);
+  const [connections, setConnections] = useState<{
+    youtubeToken: string;
+    pixverse: string;
+    gemini?: string;
+    workersHealthy?: boolean;
+  }>({
     youtubeToken: 'unconnected',
     pixverse: 'unconfigured',
+    gemini: 'unconfigured',
+    workersHealthy: false,
   });
 
-  useEffect(() => {
-    async function loadDashboard() {
-      try {
-        const res = await fetch('/api/dashboard');
-        if (res.ok) {
-          const json = await res.json();
-          if (json.metrics) setMetrics(json.metrics);
-          if (json.attentionItems) setAttentionItems(json.attentionItems);
-          if (json.processingNow) setProcessingNow(json.processingNow);
-          if (json.upcoming) setUpcoming(json.upcoming);
-          if (json.connections) setConnections(json.connections);
+  const loadDashboard = useCallback(async () => {
+    setLoading(true);
+    setError(null);
+    try {
+      const [dashRes, projRes] = await Promise.all([
+        fetch('/api/dashboard'),
+        fetch('/api/projects').catch(() => null),
+      ]);
 
-          // If there are real active items or jobs in production, switch to active command
-          if (json.metrics?.inProduction > 0 || json.metrics?.needsReview > 0 || json.attentionItems?.length > 0) {
-            setViewMode('active');
-          }
-        }
-      } catch {
-        // Keep zero state defaults
+      if (!dashRes.ok) {
+        const errJson = await dashRes.json().catch(() => ({}));
+        throw new Error(errJson.error || `HTTP ${dashRes.status}: Failed to load dashboard`);
       }
+
+      const json = await dashRes.json();
+      if (json.metrics) setMetrics(json.metrics);
+      if (json.attentionItems) setAttentionItems(json.attentionItems);
+      if (json.processingNow) setProcessingNow(json.processingNow);
+      if (json.upcoming) setUpcoming(json.upcoming);
+      if (json.connections) setConnections(json.connections);
+      if (json.workspaceId) setWorkspaceProvisioned(true);
+
+      if (projRes && projRes.ok) {
+        const pJson = await projRes.json().catch(() => ({}));
+        setHasProjects(Boolean(pJson.projects && pJson.projects.length > 0));
+      }
+
+      // Switch to active command view if there are active jobs or items needing review
+      if (json.metrics?.inProduction > 0 || json.metrics?.needsReview > 0 || json.attentionItems?.length > 0) {
+        setViewMode('active');
+      }
+    } catch (err: unknown) {
+      const msg = err instanceof Error ? err.message : 'Database connection error';
+      setError(msg);
+    } finally {
+      setLoading(false);
     }
-    loadDashboard();
   }, []);
+
+  useEffect(() => {
+    loadDashboard();
+  }, [loadDashboard]);
+
+  // Compute dynamic readiness score based on real database & connection state
+  const readinessChecklist = [
+    { id: 'workspace', label: 'Workspace provisioned', done: workspaceProvisioned },
+    { id: 'project', label: 'First project created', done: hasProjects },
+    { id: 'gemini', label: 'Gemini AI connected', done: connections.gemini === 'connected' },
+    { id: 'pixverse', label: 'Video provider configured', done: connections.pixverse === 'connected' },
+    { id: 'youtube', label: 'YouTube channel linked', done: connections.youtubeToken === 'connected' },
+    { id: 'worker', label: 'Render worker healthy', done: Boolean(connections.workersHealthy) },
+  ];
+  const completedCount = readinessChecklist.filter((c) => c.done).length;
+  const readinessPercent = Math.round((completedCount / readinessChecklist.length) * 100);
 
   return (
     <StudioLayout>
@@ -115,6 +157,28 @@ export default function OverviewPage() {
           Screen 04: Active Command
         </button>
       </div>
+
+      {loading && !error && (
+        <div className="mb-4 text-xs font-mono text-[#9CA3AF] flex items-center gap-2 cut-in">
+          <span className="w-1.5 h-1.5 rounded-full bg-[#E5A93C] animate-pulse" />
+          <span>Verifying studio session and database state...</span>
+        </div>
+      )}
+
+      {error && (
+        <div className="mb-6 p-4 rounded-xl bg-red-950/40 border border-red-500/40 text-red-200 text-xs flex items-center justify-between gap-4 font-mono cut-in">
+          <div>
+            <span className="font-semibold text-red-400">Database Connection Error:</span> {error}
+          </div>
+          <button
+            type="button"
+            onClick={() => loadDashboard()}
+            className="px-3 py-1 bg-red-500/20 hover:bg-red-500/40 border border-red-500/40 rounded-lg text-white font-medium transition-colors"
+          >
+            Retry
+          </button>
+        </div>
+      )}
 
       {viewMode === 'welcome' ? (
         /* Screen 32: Welcome / Genuine Zero State */
@@ -163,7 +227,7 @@ export default function OverviewPage() {
                       />
                       <path
                         className="text-[#E5A93C]"
-                        strokeDasharray="17, 100"
+                        strokeDasharray={`${readinessPercent}, 100`}
                         strokeWidth="3.5"
                         strokeLinecap="round"
                         stroke="currentColor"
@@ -171,12 +235,14 @@ export default function OverviewPage() {
                         d="M18 2.0845 a 15.9155 15.9155 0 0 1 0 31.831 a 15.9155 15.9155 0 0 1 0 -31.831"
                       />
                     </svg>
-                    <span>Readiness</span>
+                    <span>Readiness ({readinessPercent}%)</span>
                   </h2>
-                  <span className="text-xs font-mono text-[#E5A93C]">1 of 6 complete</span>
+                  <span className="text-xs font-mono text-[#E5A93C]">{completedCount} of 6 complete</span>
                 </div>
                 <p className="text-xs text-[#9CA3AF] mb-6">
-                  Finish setting up your workspace checklist to unlock automated publishing.
+                  {completedCount === 6
+                    ? 'All workspace requirements met. Ready for automated publishing.'
+                    : 'Finish setting up your workspace checklist to unlock automated publishing.'}
                 </p>
               </div>
               <Link

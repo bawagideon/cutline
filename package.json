@@ -9,7 +9,7 @@
     "start": "next start",
     "lint": "next lint",
     "type-check": "tsc --noEmit",
-    "test": "node --test --experimental-strip-types tests/crypto-vault.test.ts tests/render-provider.test.ts tests/safe-downloader.test.ts tests/worker-queue.test.ts tests/tenant-isolation.test.ts"
+    "test": "node --test --experimental-strip-types tests/crypto-vault.test.ts tests/render-provider.test.ts tests/safe-downloader.test.ts tests/worker-queue.test.ts tests/tenant-isolation.test.ts tests/two-user-isolation.test.ts"
   },
   "dependencies": {
     "@clerk/nextjs": "^7.9.17",

@@ -53,6 +53,93 @@ export function extractToken(req: {
 }
 
 /**
+ * Atomically provisions or retrieves an isolated personal workspace for a user.
+ * Attempts atomic RPC first; falls back to idempotent table queries with race handling.
+ */
+export async function provisionPersonalWorkspace(
+  userId: string,
+  workspaceName = 'Personal Studio'
+): Promise<string> {
+  const serviceDb = getSupabaseServiceClient();
+
+  // 1. Try atomic PostgreSQL RPC provision_workspace_for_user
+  try {
+    const { data: rpcWsId, error: rpcError } = await serviceDb.rpc('provision_workspace_for_user', {
+      p_user_id: userId,
+      p_workspace_name: workspaceName,
+    });
+
+    if (!rpcError && rpcWsId) {
+      return rpcWsId as string;
+    }
+  } catch {
+    // Fall back to table queries if RPC is not available in mock/offline environment
+  }
+
+  // 2. Check existing membership first to prevent duplicate creation
+  const { data: existing } = await serviceDb
+    .from('workspace_members')
+    .select('workspace_id')
+    .eq('user_id', userId)
+    .order('created_at', { ascending: true })
+    .limit(1)
+    .maybeSingle();
+
+  if (existing?.workspace_id) {
+    return existing.workspace_id;
+  }
+
+  // 3. Insert workspace and owner membership
+  const { data: newWs, error: wsError } = await serviceDb
+    .from('workspaces')
+    .insert({
+      name: workspaceName,
+      owner_id: userId,
+    })
+    .select('id')
+    .single();
+
+  if (wsError || !newWs) {
+    // If concurrent request won the race, fetch membership
+    const { data: raceWs } = await serviceDb
+      .from('workspace_members')
+      .select('workspace_id')
+      .eq('user_id', userId)
+      .limit(1)
+      .maybeSingle();
+
+    if (raceWs?.workspace_id) {
+      return raceWs.workspace_id;
+    }
+    throw new ForbiddenError(`Failed to provision isolated personal workspace: ${wsError?.message || 'DB error'}`);
+  }
+
+  const { error: memberError } = await serviceDb
+    .from('workspace_members')
+    .insert({
+      workspace_id: newWs.id,
+      user_id: userId,
+      role: 'owner',
+    });
+
+  if (memberError) {
+    const { data: raceMember } = await serviceDb
+      .from('workspace_members')
+      .select('workspace_id')
+      .eq('user_id', userId)
+      .limit(1)
+      .maybeSingle();
+
+    if (raceMember?.workspace_id) {
+      return raceMember.workspace_id;
+    }
+    throw new ForbiddenError(`Failed to assign workspace ownership: ${memberError.message}`);
+  }
+
+  return newWs.id;
+}
+
+/**
  * Validates request authorization and workspace access.
  * Strictly enforces per-user tenant isolation:
  * - Supports Clerk server authentication and token/cookie sessions.
@@ -120,30 +207,14 @@ export async function authenticateRequest(
           };
         }
 
-        // Auto-provision personal workspace for Clerk user
-        const { data: newWorkspace } = await serviceDb
-          .from('workspaces')
-          .insert({
-            name: 'Personal Studio',
-            owner_id: userId,
-          })
-          .select()
-          .single();
-
-        if (newWorkspace) {
-          await serviceDb.from('workspace_members').insert({
-            workspace_id: newWorkspace.id,
-            user_id: userId,
-            role: 'owner',
-          });
-
-          return {
-            userId,
-            email: userEmail,
-            workspaceId: newWorkspace.id,
-            role: 'owner',
-          };
-        }
+        // Auto-provision personal workspace atomically for Clerk user
+        const workspaceId = await provisionPersonalWorkspace(userId, 'Personal Studio');
+        return {
+          userId,
+          email: userEmail,
+          workspaceId,
+          role: 'owner',
+        };
       }
     }
   } catch (err: unknown) {
@@ -222,36 +293,12 @@ export async function authenticateRequest(
     };
   }
 
-  // User has no workspace yet -> Provision an isolated personal workspace transactionally
-  const { data: newWorkspace, error: wsError } = await serviceDb
-    .from('workspaces')
-    .insert({
-      name: 'Personal Studio',
-      owner_id: user.id,
-    })
-    .select()
-    .single();
-
-  if (wsError || !newWorkspace) {
-    throw new ForbiddenError('Failed to provision isolated personal workspace.');
-  }
-
-  const { error: memberInsertError } = await serviceDb
-    .from('workspace_members')
-    .insert({
-      workspace_id: newWorkspace.id,
-      user_id: user.id,
-      role: 'owner',
-    });
-
-  if (memberInsertError) {
-    throw new ForbiddenError('Failed to assign workspace ownership.');
-  }
-
+  // User has no workspace yet -> Provision an isolated personal workspace atomically
+  const workspaceId = await provisionPersonalWorkspace(user.id, 'Personal Studio');
   return {
     userId: user.id,
     email: user.email || '',
-    workspaceId: newWorkspace.id,
+    workspaceId,
     role: 'owner',
   };
 }

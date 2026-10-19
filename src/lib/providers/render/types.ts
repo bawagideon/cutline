@@ -7,6 +7,7 @@ export interface RenderTaskRequest {
   aspectRatio: '16:9' | '9:16';
   resolution?: '720p' | '1080p';
   seed?: number;
+  idempotencyKey?: string;
 }
 
 export interface RenderTaskSubmission {

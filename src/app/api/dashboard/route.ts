@@ -2,6 +2,14 @@ import { NextRequest, NextResponse } from 'next/server';
 import { authenticateRequest, UnauthorizedError, ForbiddenError } from '@/lib/auth/session';
 import { getSupabaseServiceClient } from '@/lib/database/client';
 
+function formatTimeAgo(iso?: string | null): string {
+  if (!iso) return 'recently';
+  const diffSec = Math.max(0, Math.floor((Date.now() - new Date(iso).getTime()) / 1000));
+  if (diffSec < 60) return `${diffSec}s ago`;
+  if (diffSec < 3600) return `${Math.floor(diffSec / 60)}m ago`;
+  return `${Math.floor(diffSec / 3600)}h ago`;
+}
+
 export async function GET(req: NextRequest) {
   try {
     const session = await authenticateRequest(req);
@@ -20,8 +28,9 @@ export async function GET(req: NextRequest) {
       scheduledEpisodesRes,
       costRes,
       vaultRes,
+      workspaceRes,
     ] = await Promise.all([
-      // 1. Worker heartbeats (infrastructure liveness)
+      // 1. Worker heartbeats (infrastructure liveness across cluster)
       supabase
         .from('worker_heartbeats')
         .select('*', { count: 'exact', head: true })
@@ -84,21 +93,34 @@ export async function GET(req: NextRequest) {
         .from('integration_vault')
         .select('provider, status')
         .eq('workspace_id', session.workspaceId),
+
+      // 10. Real workspace name
+      supabase
+        .from('workspaces')
+        .select('name')
+        .eq('id', session.workspaceId)
+        .maybeSingle(),
     ]);
 
-    // Check for database errors — fail explicitly rather than masking outages as empty states
-    const criticalError =
-      inProdRes.error ||
-      needsReviewRes.error ||
-      scheduledCountRes.error ||
-      scheduledEpisodesRes.error ||
-      activeJobsRes.error;
+    // Check for all database query errors — fail explicitly rather than masking outages
+    const queryErrors = [
+      workersRes.error,
+      inProdRes.error,
+      needsReviewRes.error,
+      scheduledCountRes.error,
+      reviewEpisodesRes.error,
+      activeJobsRes.error,
+      scheduledEpisodesRes.error,
+      costRes.error,
+      vaultRes.error,
+      workspaceRes.error,
+    ].filter(Boolean);
 
-    if (criticalError) {
+    if (queryErrors.length > 0) {
       return NextResponse.json(
         {
           error: 'Database query failed.',
-          details: criticalError.message,
+          details: queryErrors.map((e) => e?.message).join('; '),
         },
         { status: 500 }
       );
@@ -111,9 +133,10 @@ export async function GET(req: NextRequest) {
       projects?: { name?: string } | null;
     }
 
-    interface ProductionJobRecord {
+    interface ActiveProductionJobRecord {
       id: string;
       stage: string;
+      updated_at?: string | null;
     }
 
     interface ScheduledEpisodeRecord {
@@ -134,31 +157,46 @@ export async function GET(req: NextRequest) {
       statusColor: 'amber' as const,
     }));
 
-    const processingNow = ((activeJobsRes.data || []) as unknown as ProductionJobRecord[]).map((job) => ({
+    const processingNow = ((activeJobsRes.data || []) as unknown as ActiveProductionJobRecord[]).map((job) => ({
       id: job.id,
       title: `Job ${job.id.slice(0, 8)} · ${job.stage}`,
       stage: job.stage,
       stageLabel: job.stage,
-      updatedAgo: 'recently',
+      updatedAgo: formatTimeAgo(job.updated_at),
     }));
 
     const upcoming = ((scheduledEpisodesRes.data || []) as unknown as ScheduledEpisodeRecord[]).map((ep) => ({
       episode: `EP ${String(ep.episode_number).padStart(2, '0')}`,
-      time: ep.scheduled_publish_at || 'Planned',
+      time: ep.scheduled_publish_at ? new Date(ep.scheduled_publish_at).toLocaleDateString() : 'Planned',
       status: 'Scheduled',
     }));
 
-    // Calculate real workspace spend
+    // Calculate real workspace spend with provenance tracking
     let totalSpend = 0.0;
-    let hasActualSpend = false;
+    let hasEstimated = false;
+    let hasReported = false;
+
     if (costRes.data && costRes.data.length > 0) {
       for (const row of costRes.data) {
         const val = parseFloat(row.cost_usd);
         if (!isNaN(val) && val > 0) {
           totalSpend += val;
-          hasActualSpend = true;
+          if (row.cost_type === 'provider-reported') {
+            hasReported = true;
+          } else {
+            hasEstimated = true;
+          }
         }
       }
+    }
+
+    let spendReportType: 'provider-reported' | 'estimated' | 'mixed' | 'none' = 'none';
+    if (hasReported && hasEstimated) {
+      spendReportType = 'mixed';
+    } else if (hasReported) {
+      spendReportType = 'provider-reported';
+    } else if (hasEstimated) {
+      spendReportType = 'estimated';
     }
 
     // Vault statuses
@@ -169,9 +207,11 @@ export async function GET(req: NextRequest) {
       }
     }
 
+    const realWorkspaceName = workspaceRes.data?.name || 'Personal Studio';
+
     return NextResponse.json({
       userName: session.email ? session.email.split('@')[0] : 'Creator',
-      workspaceName: 'Personal Studio',
+      workspaceName: realWorkspaceName,
       workspaceId: session.workspaceId,
       metrics: {
         inProduction: inProductionCount,
@@ -181,7 +221,7 @@ export async function GET(req: NextRequest) {
         scheduled: scheduledCount,
         nextScheduled: scheduledCount > 0 ? 'Scheduled' : 'None',
         spendOctUsd: Number(totalSpend.toFixed(2)),
-        spendReportType: hasActualSpend ? 'provider-reported' : 'unconfigured',
+        spendReportType,
       },
       attentionItems,
       processingNow,
@@ -190,7 +230,9 @@ export async function GET(req: NextRequest) {
         youtubeToken: vaultMap.get('youtube') || 'unconnected',
         pixverse: vaultMap.get('pixverse') || 'unconfigured',
         gemini: vaultMap.get('gemini') || 'unconfigured',
+        // Worker heartbeats are cluster-wide infrastructure liveness, not per-workspace isolated workers
         workersHealthy: (workersRes.count || 0) > 0,
+        workerClusterScope: 'infrastructure',
       },
     });
   } catch (err: unknown) {

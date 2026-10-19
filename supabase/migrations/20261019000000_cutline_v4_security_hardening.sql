@@ -1,38 +1,54 @@
 -- ==============================================================================
 -- CUTLINE STUDIO: V4 SECURITY HARDENING & RPC AUTHORIZATION LOCKDOWN
 -- Fixes:
--- 1. Eliminates workspace self-join vulnerability (P0)
+-- 1. Eliminates workspace self-join vulnerability and RLS infinite recursion (P0)
 -- 2. Explicitly revokes claim_next_production_job from PUBLIC/anon/authenticated (P0)
--- 3. Provides atomic, race-condition-safe workspace provisioning RPC
+-- 3. Locks down provision_workspace_for_user strictly to service_role (P0)
+-- 4. Introduces safe is_workspace_admin_or_owner SECURITY DEFINER helper
+-- 5. Implements claim fencing and lease recovery in claim_next_production_job
 -- ==============================================================================
 
--- 1. DROP VULNERABLE WORKSPACE MEMBERSHIP SELF-INSERT POLICY
-DROP POLICY IF EXISTS workspace_members_self_insert ON workspace_members;
+-- 1. DROP VULNERABLE & RECURSIVE WORKSPACE MEMBERSHIP POLICIES
+DROP POLICY IF EXISTS workspace_members_self_insert ON public.workspace_members;
+DROP POLICY IF EXISTS workspace_members_authorized_insert ON public.workspace_members;
 
--- 2. RESTRICT WORKSPACE MEMBER CREATION TO AUTHORIZED WORKSPACE OWNERS/ADMINS ONLY
-DO $$
+-- 2. CREATE NON-RECURSIVE SECURITY DEFINER ROLE CHECK HELPER
+-- Using a SECURITY DEFINER function with a fixed search path executes as the table owner,
+-- preventing PostgreSQL from triggering recursive policy evaluation on public.workspace_members.
+CREATE OR REPLACE FUNCTION public.is_workspace_admin_or_owner(
+    p_workspace_id UUID,
+    p_user_id UUID
+)
+RETURNS BOOLEAN AS $$
 BEGIN
-    IF NOT EXISTS (
-        SELECT 1 FROM pg_policies 
-        WHERE tablename = 'workspace_members' AND policyname = 'workspace_members_authorized_insert'
-    ) THEN
-        CREATE POLICY workspace_members_authorized_insert ON workspace_members
-            FOR INSERT
-            WITH CHECK (
-                EXISTS (
-                    SELECT 1 FROM workspace_members existing
-                    WHERE existing.workspace_id = workspace_members.workspace_id
-                      AND existing.user_id = auth.uid()
-                      AND existing.role IN ('owner', 'admin')
-                )
-            );
+    IF p_workspace_id IS NULL OR p_user_id IS NULL THEN
+        RETURN FALSE;
     END IF;
-END $$;
 
--- 3. ATOMIC WORKSPACE PROVISIONING RPC (SECURITY DEFINER)
--- Atomically creates a workspace and assigns owner membership in a single transaction.
--- Prevents race conditions, duplicate workspaces, and orphan entries on first login.
-CREATE OR REPLACE FUNCTION provision_workspace_for_user(
+    RETURN EXISTS (
+        SELECT 1 FROM public.workspace_members
+        WHERE workspace_id = p_workspace_id
+          AND user_id = p_user_id
+          AND role IN ('owner', 'admin')
+    );
+END;
+$$ LANGUAGE plpgsql SECURITY DEFINER SET search_path = public, pg_temp;
+
+REVOKE ALL ON FUNCTION public.is_workspace_admin_or_owner(UUID, UUID) FROM PUBLIC;
+REVOKE ALL ON FUNCTION public.is_workspace_admin_or_owner(UUID, UUID) FROM anon;
+GRANT EXECUTE ON FUNCTION public.is_workspace_admin_or_owner(UUID, UUID) TO authenticated, service_role;
+
+-- 3. RESTRICT WORKSPACE MEMBER INSERTION VIA NON-RECURSIVE POLICY
+CREATE POLICY workspace_members_authorized_insert ON public.workspace_members
+    FOR INSERT
+    WITH CHECK (
+        public.is_workspace_admin_or_owner(workspace_id, auth.uid())
+    );
+
+-- 4. ATOMIC WORKSPACE PROVISIONING RPC (SERVICE ROLE ONLY)
+-- Accepts caller identity ONLY when executed by the trusted server-side service_role.
+-- Plain authenticated clients CANNOT execute this RPC with arbitrary identities.
+CREATE OR REPLACE FUNCTION public.provision_workspace_for_user(
     p_user_id UUID,
     p_workspace_name TEXT DEFAULT 'Personal Studio'
 )
@@ -40,9 +56,13 @@ RETURNS UUID AS $$
 DECLARE
     v_workspace_id UUID;
 BEGIN
-    -- 1. Return existing workspace if user already has one
+    IF p_user_id IS NULL THEN
+        RAISE EXCEPTION 'p_user_id cannot be null';
+    END IF;
+
+    -- 1. Return existing workspace if user already belongs to one
     SELECT workspace_id INTO v_workspace_id
-    FROM workspace_members
+    FROM public.workspace_members
     WHERE user_id = p_user_id
     ORDER BY created_at ASC
     LIMIT 1;
@@ -51,13 +71,13 @@ BEGIN
         RETURN v_workspace_id;
     END IF;
 
-    -- 2. Create personal workspace
-    INSERT INTO workspaces (name, owner_id)
+    -- 2. Atomically create personal workspace
+    INSERT INTO public.workspaces (name, owner_id)
     VALUES (COALESCE(p_workspace_name, 'Personal Studio'), p_user_id)
     RETURNING id INTO v_workspace_id;
 
     -- 3. Assign owner membership atomically
-    INSERT INTO workspace_members (workspace_id, user_id, role)
+    INSERT INTO public.workspace_members (workspace_id, user_id, role)
     VALUES (v_workspace_id, p_user_id, 'owner')
     ON CONFLICT (workspace_id, user_id) DO NOTHING;
 
@@ -65,18 +85,74 @@ BEGIN
 END;
 $$ LANGUAGE plpgsql SECURITY DEFINER SET search_path = public, pg_temp;
 
--- 4. EXPLICIT PRIVILEGE AUDIT & RESTRICTIONS ON WORKER RPC (P0 FIX)
--- PostgreSQL grants EXECUTE to PUBLIC by default on functions.
--- We explicitly revoke EXECUTE from PUBLIC, anon, and authenticated.
-REVOKE ALL ON FUNCTION claim_next_production_job(TEXT, INT) FROM PUBLIC;
-REVOKE ALL ON FUNCTION claim_next_production_job(TEXT, INT) FROM anon;
-REVOKE ALL ON FUNCTION claim_next_production_job(TEXT, INT) FROM authenticated;
+-- Explicitly revoke from PUBLIC, anon, AND authenticated (P0 FIX)
+REVOKE ALL ON FUNCTION public.provision_workspace_for_user(UUID, TEXT) FROM PUBLIC;
+REVOKE ALL ON FUNCTION public.provision_workspace_for_user(UUID, TEXT) FROM anon;
+REVOKE ALL ON FUNCTION public.provision_workspace_for_user(UUID, TEXT) FROM authenticated;
+-- Grant strictly and exclusively to service_role
+GRANT EXECUTE ON FUNCTION public.provision_workspace_for_user(UUID, TEXT) TO service_role;
 
--- Grant EXECUTE exclusively to trusted backend worker execution identity (service_role)
-GRANT EXECUTE ON FUNCTION claim_next_production_job(TEXT, INT) TO service_role;
+-- 5. CLIENT-FACING PROVISIONING FUNCTION (DERIVES IDENTITY SOLELY FROM auth.uid())
+-- Authenticated users can only provision a workspace for THEMSELVES. No arbitrary identity allowed.
+CREATE OR REPLACE FUNCTION public.provision_my_workspace(
+    p_workspace_name TEXT DEFAULT 'Personal Studio'
+)
+RETURNS UUID AS $$
+DECLARE
+    v_caller_id UUID := auth.uid();
+BEGIN
+    IF v_caller_id IS NULL THEN
+        RAISE EXCEPTION 'Unauthenticated caller cannot provision workspace';
+    END IF;
 
--- 5. PRIVILEGE AUDIT ON WORKSPACE PROVISIONING RPC
-REVOKE ALL ON FUNCTION provision_workspace_for_user(UUID, TEXT) FROM PUBLIC;
-REVOKE ALL ON FUNCTION provision_workspace_for_user(UUID, TEXT) FROM anon;
-GRANT EXECUTE ON FUNCTION provision_workspace_for_user(UUID, TEXT) TO service_role;
-GRANT EXECUTE ON FUNCTION provision_workspace_for_user(UUID, TEXT) TO authenticated;
+    RETURN public.provision_workspace_for_user(v_caller_id, p_workspace_name);
+END;
+$$ LANGUAGE plpgsql SECURITY DEFINER SET search_path = public, pg_temp;
+
+REVOKE ALL ON FUNCTION public.provision_my_workspace(TEXT) FROM PUBLIC;
+REVOKE ALL ON FUNCTION public.provision_my_workspace(TEXT) FROM anon;
+GRANT EXECUTE ON FUNCTION public.provision_my_workspace(TEXT) TO authenticated, service_role;
+
+-- 6. ATOMIC WORKER CLAIM FUNCTION WITH FOR UPDATE SKIP LOCKED & FENCING TOKENS
+CREATE OR REPLACE FUNCTION public.claim_next_production_job(
+    p_worker_id TEXT,
+    p_lease_sec INT
+)
+RETURNS SETOF public.production_jobs AS $$
+DECLARE
+    v_job_id UUID;
+    v_now TIMESTAMPTZ := timezone('utc'::text, now());
+    v_lease_until TIMESTAMPTZ := v_now + (p_lease_sec || ' seconds')::INTERVAL;
+BEGIN
+    -- Atomically lock the oldest eligible job using FOR UPDATE SKIP LOCKED.
+    -- Strict lease check: must be queued OR lease has strictly lapsed (< v_now).
+    SELECT id INTO v_job_id
+    FROM public.production_jobs
+    WHERE stage = 'queued' 
+       OR (stage NOT IN ('completed', 'failed') AND (locked_until IS NULL OR locked_until < v_now))
+    ORDER BY created_at ASC
+    LIMIT 1
+    FOR UPDATE SKIP LOCKED;
+
+    IF v_job_id IS NULL THEN
+        RETURN;
+    END IF;
+
+    -- Update lease, increment attempt as claim fencing token, and return claimed job
+    RETURN QUERY
+    UPDATE public.production_jobs
+    SET stage = CASE WHEN stage = 'queued' THEN 'started'::text ELSE stage END,
+        locked_by = p_worker_id,
+        locked_until = v_lease_until,
+        attempt = attempt + 1,
+        updated_at = v_now
+    WHERE id = v_job_id
+    RETURNING *;
+END;
+$$ LANGUAGE plpgsql SECURITY DEFINER SET search_path = public, pg_temp;
+
+-- Revoke all permissions on worker claim function from untrusted roles
+REVOKE ALL ON FUNCTION public.claim_next_production_job(TEXT, INT) FROM PUBLIC;
+REVOKE ALL ON FUNCTION public.claim_next_production_job(TEXT, INT) FROM anon;
+REVOKE ALL ON FUNCTION public.claim_next_production_job(TEXT, INT) FROM authenticated;
+GRANT EXECUTE ON FUNCTION public.claim_next_production_job(TEXT, INT) TO service_role;

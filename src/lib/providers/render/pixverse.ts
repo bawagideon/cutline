@@ -26,12 +26,17 @@ export class PixVerseProvider implements IRenderProvider {
 
     const apiUrl = process.env.PIXVERSE_API_URL || this.defaultApiUrl;
 
+    const headers: Record<string, string> = {
+      'API-KEY': key,
+      'Content-Type': 'application/json',
+    };
+    if (request.idempotencyKey) {
+      headers['Idempotency-Key'] = request.idempotencyKey;
+    }
+
     const response = await fetch(`${apiUrl}/openapi/v2/video/generate`, {
       method: 'POST',
-      headers: {
-        'API-KEY': key,
-        'Content-Type': 'application/json',
-      },
+      headers,
       body: JSON.stringify({
         prompt: request.prompt,
         negative_prompt: request.negativePrompt || '',

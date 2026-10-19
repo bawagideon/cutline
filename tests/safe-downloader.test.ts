@@ -1,6 +1,10 @@
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
-import { validateMediaUrl, MediaSecurityError } from '../src/lib/providers/storage/downloader.ts';
+import {
+  validateMediaUrl,
+  validateVideoMagicBytes,
+  MediaSecurityError,
+} from '../src/lib/providers/storage/downloader.ts';
 
 describe('Safe Media Downloader Security Boundaries', () => {
   it('permits trusted render provider domains over HTTPS', () => {
@@ -45,5 +49,35 @@ describe('Safe Media Downloader Security Boundaries', () => {
         return err instanceof MediaSecurityError;
       }
     );
+  });
+
+  it('validates video magic bytes for MP4, WebM, and AVI across chunk boundaries', () => {
+    // Valid MP4 (ftyp box at byte offset 4)
+    const validMp4 = Buffer.from([
+      0x00, 0x00, 0x00, 0x18, 0x66, 0x74, 0x79, 0x70, // ... ftyp
+      0x69, 0x73, 0x6f, 0x6d, 0x00, 0x00, 0x02, 0x00, // isom
+    ]);
+    assert.equal(validateVideoMagicBytes(validMp4), true, 'Valid MP4 header must pass');
+
+    // Valid WebM / MKV (EBML header 0x1A 0x45 0xDF 0xA3)
+    const validWebm = Buffer.from([
+      0x1a, 0x45, 0xdf, 0xa3, 0x9f, 0x42, 0x86, 0x81, 0x01, 0x42, 0xf7, 0x81,
+    ]);
+    assert.equal(validateVideoMagicBytes(validWebm), true, 'Valid WebM header must pass');
+
+    // Valid AVI (RIFF + AVI)
+    const validAvi = Buffer.from('RIFF\x24\x00\x00\x00AVI LIST\x00\x00\x00\x00');
+    assert.equal(validateVideoMagicBytes(validAvi), true, 'Valid AVI header must pass');
+
+    // Malicious/fake payload: HTML spoofing
+    const fakeHtml = Buffer.from('<!DOCTYPE html><html><script>alert(1)</script></html>');
+    assert.equal(validateVideoMagicBytes(fakeHtml), false, 'HTML must be rejected as video');
+
+    // Malicious/fake payload: Executable or script
+    const fakeScript = Buffer.from('#!/bin/bash\nrm -rf /');
+    assert.equal(validateVideoMagicBytes(fakeScript), false, 'Shell script must be rejected');
+
+    // Truncated buffer (< 4 bytes)
+    assert.equal(validateVideoMagicBytes(Buffer.from([0x00, 0x01])), false, 'Truncated buffer must fail');
   });
 });

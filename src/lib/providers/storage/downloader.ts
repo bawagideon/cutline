@@ -1,4 +1,7 @@
-import crypto from 'crypto';
+import crypto from 'node:crypto';
+import fs from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
 import { getSupabaseServiceClient } from '../../database/client.ts';
 
 export interface DownloadResult {
@@ -59,14 +62,46 @@ export function validateMediaUrl(targetUrl: string): URL {
 }
 
 /**
+ * Validates file magic bytes across chunk boundaries.
+ * Recognizes MP4/MOV ('ftyp', 'moov', 'mdat'), WebM/MKV (EBML), and AVI ('RIFF'...'AVI ').
+ */
+export function validateVideoMagicBytes(headerBuffer: Buffer): boolean {
+  if (headerBuffer.length < 4) return false;
+
+  // WebM / Matroska EBML: 0x1A, 0x45, 0xDF, 0xA3
+  if (
+    headerBuffer[0] === 0x1a &&
+    headerBuffer[1] === 0x45 &&
+    headerBuffer[2] === 0xdf &&
+    headerBuffer[3] === 0xa3
+  ) {
+    return true;
+  }
+
+  // MP4 / MOV / QuickTime: bytes 4..7 are 'ftyp', 'moov', or 'mdat'
+  if (headerBuffer.length >= 8) {
+    const boxType = headerBuffer.subarray(4, 8).toString('ascii');
+    if (boxType === 'ftyp' || boxType === 'moov' || boxType === 'mdat') {
+      return true;
+    }
+  }
+
+  // AVI: bytes 0..3 'RIFF' and bytes 8..11 'AVI '
+  if (headerBuffer.length >= 12) {
+    const riff = headerBuffer.subarray(0, 4).toString('ascii');
+    const avi = headerBuffer.subarray(8, 12).toString('ascii');
+    if (riff === 'RIFF' && avi === 'AVI ') {
+      return true;
+    }
+  }
+
+  return false;
+}
+
+/**
  * Safely downloads a video file, enforces size limits and timeout, computes SHA-256,
+ * validates magic bytes across chunk boundaries, streams to disk (avoiding 500MB V8 heap exhaustion),
  * and persists to private Supabase storage.
- *
- * Security guarantees:
- * 1. HTTPS only.
- * 2. Manual redirect validation on every hop to prevent SSRF bypasses.
- * 3. Streaming byte-level limits before memory buffering.
- * 4. Fail-closed: Never reports success if storage write fails.
  */
 export async function downloadAndStoreMedia(
   videoUrl: string,
@@ -77,6 +112,7 @@ export async function downloadAndStoreMedia(
 
   const controller = new AbortController();
   const timeoutId = setTimeout(() => controller.abort(), DOWNLOAD_TIMEOUT_MS);
+  const tmpPath = path.join(os.tmpdir(), `cutline-dl-${crypto.randomUUID()}.tmp`);
 
   try {
     let currentUrl = validatedUrl.toString();
@@ -131,57 +167,74 @@ export async function downloadAndStoreMedia(
 
     const contentType = finalResponse.headers.get('content-type') || 'video/mp4';
 
-    // Stream chunks with running byte counter and streaming hash computation
+    // Stream directly to temporary disk file with incremental SHA-256 and header accumulation
     const reader = finalResponse.body.getReader();
-    const chunks: Uint8Array[] = [];
+    const fileWriteStream = fs.createWriteStream(tmpPath);
     let receivedBytes = 0;
     const hasher = crypto.createHash('sha256');
+    let headerBuffer = Buffer.alloc(0);
     let validatedSignature = false;
 
-    while (true) {
-      const { done, value } = await reader.read();
-      if (done) break;
-      if (value) {
-        receivedBytes += value.length;
-        if (receivedBytes > MAX_FILE_SIZE_BYTES) {
-          reader.cancel().catch(() => {});
-          throw new MediaSecurityError(`Streamed media exceeded maximum safety ceiling of ${MAX_FILE_SIZE_BYTES} bytes.`);
-        }
-
-        // Validate media magic bytes from initial chunk
-        if (!validatedSignature && receivedBytes >= 8) {
-          const sample = Buffer.from(value);
-          // Check for MP4 ftyp / ISO box or WebM header
-          const isFtyp = sample.length >= 8 && sample.slice(4, 8).toString('ascii') === 'ftyp';
-          const isWebm = sample.length >= 4 && sample[0] === 0x1a && sample[1] === 0x45 && sample[2] === 0xdf && sample[3] === 0xa3;
-          const isMoov = sample.length >= 8 && sample.slice(4, 8).toString('ascii') === 'moov';
-
-          // If content-type claimed video/mp4 or webm, verify magic bytes
-          if (!isFtyp && !isWebm && !isMoov && (contentType.includes('video') || contentType.includes('mp4'))) {
+    try {
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        if (value) {
+          receivedBytes += value.length;
+          if (receivedBytes > MAX_FILE_SIZE_BYTES) {
             reader.cancel().catch(() => {});
-            throw new MediaSecurityError('Invalid media format: Header does not match recognized video signatures.');
+            throw new MediaSecurityError(`Streamed media exceeded maximum safety ceiling of ${MAX_FILE_SIZE_BYTES} bytes.`);
           }
-          validatedSignature = true;
-        }
 
-        hasher.update(value);
-        chunks.push(value);
+          // Accumulate first 32 bytes for cross-chunk magic byte validation
+          if (!validatedSignature) {
+            headerBuffer = Buffer.concat([headerBuffer, Buffer.from(value)]);
+            if (headerBuffer.length >= 12) {
+              if (!validateVideoMagicBytes(headerBuffer)) {
+                reader.cancel().catch(() => {});
+                throw new MediaSecurityError('Invalid media format: Header does not match recognized video signatures.');
+              }
+              validatedSignature = true;
+            }
+          }
+
+          hasher.update(value);
+          const writeOk = fileWriteStream.write(Buffer.from(value));
+          if (!writeOk) {
+            await new Promise<void>((resolve) => fileWriteStream.once('drain', () => resolve()));
+          }
+        }
       }
+
+      // Check header if file was smaller than 12 bytes or validateSignature hasn't triggered
+      if (!validatedSignature) {
+        if (!validateVideoMagicBytes(headerBuffer)) {
+          throw new MediaSecurityError('Invalid media format: Header does not match recognized video signatures.');
+        }
+        validatedSignature = true;
+      }
+    } finally {
+      await new Promise<void>((resolve, reject) => {
+        fileWriteStream.end((err?: Error | null) => {
+          if (err) reject(err);
+          else resolve();
+        });
+      });
     }
 
-    const buffer = Buffer.concat(chunks);
     const hash = hasher.digest('hex');
 
-    // Upload to Supabase Storage
+    // Upload to Supabase Storage via disk stream (O(1) memory)
     const hasLiveSupabase = Boolean(
       process.env.NEXT_PUBLIC_SUPABASE_URL && process.env.SUPABASE_SERVICE_ROLE_KEY
     );
 
     if (hasLiveSupabase) {
       const supabase = getSupabaseServiceClient();
+      const readStream = fs.createReadStream(tmpPath);
       const { error: uploadError } = await supabase.storage
         .from(bucketName)
-        .upload(destinationPath, buffer, {
+        .upload(destinationPath, readStream, {
           contentType,
           upsert: true,
         });
@@ -199,10 +252,12 @@ export async function downloadAndStoreMedia(
     return {
       storagePath: destinationPath,
       sha256Hash: hash,
-      bytesDownloaded: buffer.length,
+      bytesDownloaded: receivedBytes,
       contentType,
     };
   } finally {
     clearTimeout(timeoutId);
+    // Always clean up temp file from disk
+    await fs.promises.unlink(tmpPath).catch(() => {});
   }
 }

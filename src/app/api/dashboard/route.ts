@@ -36,70 +36,89 @@ export async function GET(req: NextRequest) {
       .eq('projects.workspace_id', session.workspaceId)
       .eq('stage', 'schedule');
 
+    interface EpisodeAttentionRecord {
+      id: string;
+      episode_number: number;
+      project_id: string;
+      projects?: { name?: string } | null;
+    }
+
+    interface ProductionJobRecord {
+      id: string;
+      stage: string;
+    }
+
+    interface ScheduledEpisodeRecord {
+      episode_number: number;
+      scheduled_publish_at?: string | null;
+    }
+
+    // Query real attention items
+    const { data: reviewEpisodes } = await supabase
+      .from('episodes')
+      .select('id, episode_number, title, project_id, projects!inner(name, id)')
+      .eq('projects.workspace_id', session.workspaceId)
+      .eq('stage', 'review')
+      .limit(5);
+
+    const attentionItems = ((reviewEpisodes || []) as unknown as EpisodeAttentionRecord[]).map((ep) => ({
+      id: ep.id,
+      title: `EP ${String(ep.episode_number).padStart(2, '0')} awaiting final review`,
+      subtitle: ep.projects?.name || 'Active Project',
+      actionLabel: 'Review',
+      actionHref: `/projects/${ep.project_id}/episodes/${ep.id}/review`,
+      statusColor: 'amber',
+    }));
+
+    // Query real processing jobs
+    const { data: activeJobs } = await supabase
+      .from('production_jobs')
+      .select('id, stage, updated_at, episode_id')
+      .eq('workspace_id', session.workspaceId)
+      .in('stage', ['started', 'waiting_for_provider', 'downloading', 'assembling'])
+      .limit(5);
+
+    const processingNow = ((activeJobs || []) as unknown as ProductionJobRecord[]).map((job) => ({
+      id: job.id,
+      title: `Job ${job.id.slice(0, 8)} · ${job.stage}`,
+      stage: job.stage,
+      stageLabel: job.stage,
+      updatedAgo: 'recently',
+    }));
+
+    // Query real scheduled episodes
+    const { data: scheduledEpisodes } = await supabase
+      .from('episodes')
+      .select('id, episode_number, stage, scheduled_publish_at')
+      .eq('stage', 'schedule')
+      .limit(5);
+
+    const upcoming = ((scheduledEpisodes || []) as unknown as ScheduledEpisodeRecord[]).map((ep) => ({
+      episode: `EP ${String(ep.episode_number).padStart(2, '0')}`,
+      time: ep.scheduled_publish_at || 'Planned',
+      status: 'Scheduled',
+    }));
+
     return NextResponse.json({
-      userName: 'Ade',
-      workspaceName: 'Solo workspace',
+      userName: session.email ? session.email.split('@')[0] : 'Creator',
+      workspaceName: 'Personal Studio',
       metrics: {
-        inProduction: inProductionCount || 3,
-        runningDetail: '2 running, 1 queued',
-        needsReview: needsReviewCount || 2,
-        oldestReview: '3h ago',
-        scheduled: scheduledCount || 4,
-        nextScheduled: 'next Fri 18:00 WAT',
-        spendOctUsd: 38.4,
+        inProduction: inProductionCount || 0,
+        runningDetail: inProductionCount ? `${inProductionCount} in progress` : '0 running',
+        needsReview: needsReviewCount || 0,
+        oldestReview: needsReviewCount ? 'Pending' : 'None',
+        scheduled: scheduledCount || 0,
+        nextScheduled: scheduledCount ? 'Scheduled' : 'None',
+        spendOctUsd: 0.0,
         spendReportType: 'provider-reported',
       },
-      attentionItems: [
-        {
-          id: 'att-1',
-          title: 'EP 07 awaiting final review',
-          subtitle: 'Lagos After Dark',
-          actionLabel: 'Review',
-          actionHref: '/projects/lagos-after-dark/episodes/7/review',
-          statusColor: 'amber',
-        },
-        {
-          id: 'att-2',
-          title: 'Scene 4 render failed',
-          subtitle: 'Provider rejected duration',
-          actionLabel: 'Retry',
-          actionHref: '/projects/lagos-after-dark/episodes/7/scenes',
-          statusColor: 'red',
-        },
-        {
-          id: 'att-3',
-          title: 'Thumbnail missing for EP 06',
-          subtitle: 'Needed before scheduling',
-          actionLabel: 'Add',
-          actionHref: '/projects/lagos-after-dark/episodes/6',
-          statusColor: 'amber',
-        },
-      ],
-      processingNow: [
-        {
-          id: 'p-1',
-          title: 'EP 08 · scene 3 of 7',
-          stage: 'waiting_for_provider',
-          stageLabel: 'waiting_for_provider',
-          updatedAgo: '40s ago',
-        },
-        {
-          id: 'p-2',
-          title: 'EP 05 · assembling',
-          stage: 'running',
-          stageLabel: 'running',
-          updatedAgo: '2m ago',
-        },
-      ],
-      upcoming: [
-        { episode: 'EP 06', time: 'Fri 18:00', status: 'Scheduled' },
-        { episode: 'EP 05', time: 'Sun 09:00', status: 'Scheduled' },
-        { episode: 'EP 04', time: 'draft', status: 'Draft' },
-      ],
+      attentionItems,
+      processingNow,
+      upcoming,
       connections: {
-        youtubeToken: 'expires soon',
-        pixverse: 'healthy',
-        workersHealthy: (healthyWorkersCount || 1) > 0,
+        youtubeToken: 'unconnected',
+        pixverse: 'unconfigured',
+        workersHealthy: (healthyWorkersCount || 0) > 0,
       },
     });
   } catch {

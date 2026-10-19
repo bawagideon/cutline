@@ -1,48 +1,25 @@
 'use client';
 
-import React from 'react';
+import React, { useState } from 'react';
+import Link from 'next/link';
 import { StudioLayout } from '@/components/layout/StudioLayout';
 
+interface EpisodeAnalytic {
+  ep: string;
+  project: string;
+  published: string;
+  views: string;
+  retention: string;
+  likes: string;
+}
+
 export default function AnalyticsPage() {
-  const episodesAnalytics = [
-    {
-      ep: 'EP 06 · The Midnight Market',
-      project: 'Lagos After Dark',
-      published: 'Oct 15',
-      views: '42.8K',
-      retention: '62%',
-      likes: '3.1K',
-    },
-    {
-      ep: 'EP 05 · Yellow Fever Traffic',
-      project: 'Lagos After Dark',
-      published: 'Oct 08',
-      views: '38.1K',
-      retention: '58%',
-      likes: '2.8K',
-    },
-    {
-      ep: 'EP 02 · Shibuya Rain',
-      project: 'Tokyo Neon Stories',
-      published: 'Oct 04',
-      views: '34.9K',
-      retention: '51%',
-      likes: '2.4K',
-    },
-    {
-      ep: 'EP 01 · Akihabara Memories',
-      project: 'Tokyo Neon Stories',
-      published: 'Sep 28',
-      views: '32.4K',
-      retention: '49%',
-      likes: '2.1K',
-    },
-  ];
+  const [episodesAnalytics] = useState<EpisodeAnalytic[]>([]);
 
   return (
     <StudioLayout>
       {/* Header */}
-      <div className="flex flex-col md:flex-row md:items-center justify-between gap-4 mb-6">
+      <div className="flex flex-col md:flex-row md:items-center justify-between gap-4 mb-6 cut-in">
         <div>
           <h1 className="text-2xl md:text-3xl font-bold tracking-tight text-white">
             Analytics
@@ -59,15 +36,15 @@ export default function AnalyticsPage() {
         </div>
       </div>
 
-      {/* KPI Cards (Screen 20) */}
-      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-5 mb-8">
+      {/* KPI Cards */}
+      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-5 mb-8 cut-in">
         <div className="bg-[#121417] border border-[#22262E] rounded-2xl p-5">
           <div className="text-xs font-mono uppercase tracking-wider text-[#9CA3AF] mb-1">
             Total Views
           </div>
-          <div className="text-2xl md:text-3xl font-bold text-white">148.2K</div>
-          <div className="text-xs font-mono text-[#34D399] mt-1">
-            ↑ +18.4% vs last period
+          <div className="text-2xl md:text-3xl font-bold text-white font-mono">0</div>
+          <div className="text-xs font-mono text-[#9CA3AF] mt-1">
+            0 vs last period
           </div>
         </div>
 
@@ -75,9 +52,9 @@ export default function AnalyticsPage() {
           <div className="text-xs font-mono uppercase tracking-wider text-[#9CA3AF] mb-1">
             Watch Time
           </div>
-          <div className="text-2xl md:text-3xl font-bold text-white">6,120 hrs</div>
-          <div className="text-xs font-mono text-[#34D399] mt-1">
-            ↑ +12.1%
+          <div className="text-2xl md:text-3xl font-bold text-white font-mono">0.0 hrs</div>
+          <div className="text-xs font-mono text-[#9CA3AF] mt-1">
+            awaiting first release
           </div>
         </div>
 
@@ -85,9 +62,9 @@ export default function AnalyticsPage() {
           <div className="text-xs font-mono uppercase tracking-wider text-[#9CA3AF] mb-1">
             Avg Duration
           </div>
-          <div className="text-2xl md:text-3xl font-bold text-white">5m 12s</div>
-          <div className="text-xs font-mono text-[#E5A93C] mt-1">
-            54% completion rate
+          <div className="text-2xl md:text-3xl font-bold text-white font-mono">0m 00s</div>
+          <div className="text-xs font-mono text-[#9CA3AF] mt-1">
+            0% completion rate
           </div>
         </div>
 
@@ -95,66 +72,76 @@ export default function AnalyticsPage() {
           <div className="text-xs font-mono uppercase tracking-wider text-[#9CA3AF] mb-1">
             Publish Lead Time
           </div>
-          <div className="text-2xl md:text-3xl font-bold text-white">1.8 days</div>
+          <div className="text-2xl md:text-3xl font-bold text-white font-mono">0.0 days</div>
           <div className="text-xs font-mono text-[#9CA3AF] mt-1">
             idea to publish
           </div>
         </div>
       </div>
 
-      {/* Performance Chart Simulation */}
-      <div className="bg-[#121417] border border-[#22262E] rounded-2xl p-6 mb-8">
+      {/* Performance Chart / Empty State */}
+      <div className="bg-[#121417] border border-[#22262E] rounded-2xl p-6 mb-8 cut-in">
         <div className="flex items-center justify-between mb-6">
           <h2 className="text-base font-semibold text-white">Views Velocity</h2>
-          <span className="text-xs font-mono text-[#E5A93C]">Lagos After Dark (Leading)</span>
+          <span className="text-xs font-mono text-[#9CA3AF]">Awaiting published releases</span>
         </div>
 
-        {/* Visual Waveform / Bar Representation */}
-        <div className="h-44 flex items-end gap-2 pt-6">
-          {[35, 42, 38, 55, 68, 74, 62, 85, 92, 80, 98, 110, 105, 124, 138, 148].map((val, i) => (
-            <div key={i} className="flex-1 flex flex-col items-center gap-1.5 h-full justify-end group">
-              <div
-                style={{ height: `${(val / 150) * 100}%` }}
-                className="w-full bg-[#1F242D] group-hover:bg-[#E5A93C] rounded-t-md transition-all duration-200"
-              />
-              <span className="text-[10px] font-mono text-[#6B7280] hidden sm:block">
-                {i + 1}
-              </span>
-            </div>
-          ))}
+        <div className="h-32 flex items-center justify-center text-center p-6 border border-dashed border-[#22262E] rounded-xl text-xs text-[#9CA3AF] font-mono">
+          Connect your YouTube channel in Integrations to stream live video views and retention data.
         </div>
       </div>
 
-      {/* Published Episodes List */}
-      <div className="bg-[#121417] border border-[#22262E] rounded-2xl overflow-hidden divide-y divide-[#1C2028]">
-        {episodesAnalytics.map((ep, idx) => (
-          <div
-            key={idx}
-            className="p-4 md:px-6 md:py-4 flex flex-col md:flex-row md:items-center justify-between gap-4 hover:bg-[#15181D] transition-colors"
-          >
-            <div>
-              <div className="text-sm font-semibold text-white">{ep.ep}</div>
-              <div className="text-xs text-[#9CA3AF] font-mono mt-0.5">
-                {ep.project} · Published {ep.published}
-              </div>
-            </div>
+      {/* Episodes Table */}
+      <div className="bg-[#121417] border border-[#22262E] rounded-2xl overflow-hidden divide-y divide-[#1C2028] cut-in">
+        <div className="p-4 px-6 bg-[#0E1013] text-xs font-mono text-[#9CA3AF] hidden md:grid md:grid-cols-12 gap-4">
+          <div className="col-span-5">Episode & Series</div>
+          <div className="col-span-2">Published</div>
+          <div className="col-span-2">Views</div>
+          <div className="col-span-3">Retention / Likes</div>
+        </div>
 
-            <div className="flex items-center gap-6 self-end md:self-center text-xs font-mono">
-              <div>
-                <span className="text-white font-semibold">{ep.views}</span>
-                <span className="text-[#6B7280] ml-1">views</span>
+        {episodesAnalytics.length === 0 ? (
+          <div className="p-12 text-center max-w-lg mx-auto">
+            <div className="w-12 h-12 rounded-xl bg-[#1A1D23] border border-[#22262E] flex items-center justify-center text-xl text-[#60A5FA] mx-auto mb-4 font-mono">
+              📈
+            </div>
+            <h3 className="text-base font-semibold text-white mb-2">No publishing analytics yet</h3>
+            <p className="text-xs text-[#9CA3AF] mb-6 leading-relaxed">
+              Once videos are approved through the review gate and published to YouTube, detailed viewer demographics and completion retention will appear here.
+            </p>
+            <Link
+              href="/channels"
+              className="inline-flex items-center gap-2 bg-[#E5A93C] hover:bg-[#F0B84D] text-[#0B0C0E] font-semibold text-xs px-5 py-2.5 rounded-xl transition-colors btn-press shadow-md"
+            >
+              Connect YouTube Channel
+            </Link>
+          </div>
+        ) : (
+          episodesAnalytics.map((item, idx) => (
+            <div
+              key={idx}
+              className="p-4 md:px-6 md:py-4 flex flex-col md:grid md:grid-cols-12 gap-3 md:gap-4 md:items-center hover:bg-[#15181D] transition-colors"
+            >
+              <div className="md:col-span-5">
+                <div className="text-sm font-semibold text-white">{item.ep}</div>
+                <div className="text-xs text-[#9CA3AF] font-mono mt-0.5">{item.project}</div>
               </div>
-              <div>
-                <span className="text-[#34D399] font-semibold">{ep.retention}</span>
-                <span className="text-[#6B7280] ml-1">retention</span>
+
+              <div className="md:col-span-2 text-xs font-mono text-[#9CA3AF]">
+                {item.published}
               </div>
-              <div className="hidden sm:block">
-                <span className="text-white font-semibold">{ep.likes}</span>
-                <span className="text-[#6B7280] ml-1">likes</span>
+
+              <div className="md:col-span-2 text-sm font-mono font-bold text-white">
+                {item.views}
+              </div>
+
+              <div className="md:col-span-3 text-xs font-mono flex items-center gap-4">
+                <span className="text-[#34D399]">{item.retention} retention</span>
+                <span className="text-[#9CA3AF]">♥ {item.likes}</span>
               </div>
             </div>
-          </div>
-        ))}
+          ))
+        )}
       </div>
     </StudioLayout>
   );

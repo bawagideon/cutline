@@ -2,56 +2,96 @@
 
 import React, { useState, useEffect } from 'react';
 import Link from 'next/link';
+import { useUser } from '@clerk/nextjs';
 import { StudioLayout } from '@/components/layout/StudioLayout';
 import { StatusPill } from '@/components/ui/StatusPill';
 
+interface DashboardMetrics {
+  inProduction: number;
+  runningDetail: string;
+  needsReview: number;
+  oldestReview: string;
+  scheduled: number;
+  nextScheduled: string;
+  spendOctUsd: number;
+  spendReportType: string;
+}
+
+interface AttentionItem {
+  id: string;
+  title: string;
+  subtitle: string;
+  actionLabel: string;
+  actionHref: string;
+  statusColor: 'amber' | 'red';
+}
+
+interface ProcessingJob {
+  id: string;
+  title: string;
+  stage: string;
+  stageLabel: string;
+  updatedAgo: string;
+}
+
+interface UpcomingEpisode {
+  episode: string;
+  time: string;
+  status: string;
+}
+
 export default function OverviewPage() {
-  const [viewMode, setViewMode] = useState<'active' | 'welcome'>('active');
-  const [counts, setCounts] = useState({
+  const { user, isLoaded } = useUser();
+  const firstName = isLoaded && user ? user.firstName || (user.fullName ? user.fullName.split(' ')[0] : 'Creator') : 'Creator';
+
+  const [viewMode, setViewMode] = useState<'welcome' | 'active'>('welcome');
+  const [metrics, setMetrics] = useState<DashboardMetrics>({
     inProduction: 0,
+    runningDetail: '0 running',
     needsReview: 0,
+    oldestReview: 'None',
     scheduled: 0,
-    spend: '0.00',
+    nextScheduled: 'None',
+    spendOctUsd: 0.0,
+    spendReportType: 'provider-reported',
   });
-  const [secondsAgo, setSecondsAgo] = useState(40);
+  const [attentionItems, setAttentionItems] = useState<AttentionItem[]>([]);
+  const [processingNow, setProcessingNow] = useState<ProcessingJob[]>([]);
+  const [upcoming, setUpcoming] = useState<UpcomingEpisode[]>([]);
+  const [connections, setConnections] = useState<{ youtubeToken: string; pixverse: string }>({
+    youtubeToken: 'unconnected',
+    pixverse: 'unconfigured',
+  });
 
-  // Number Roll Motif: smoothly animate from cached previous value in 600ms
   useEffect(() => {
-    const timer = setTimeout(() => {
-      setCounts({
-        inProduction: 3,
-        needsReview: 2,
-        scheduled: 4,
-        spend: '38.40',
-      });
-    }, 100);
+    async function loadDashboard() {
+      try {
+        const res = await fetch('/api/dashboard');
+        if (res.ok) {
+          const json = await res.json();
+          if (json.metrics) setMetrics(json.metrics);
+          if (json.attentionItems) setAttentionItems(json.attentionItems);
+          if (json.processingNow) setProcessingNow(json.processingNow);
+          if (json.upcoming) setUpcoming(json.upcoming);
+          if (json.connections) setConnections(json.connections);
 
-    const tickInterval = setInterval(() => {
-      setSecondsAgo((prev) => (prev >= 59 ? 1 : prev + 1));
-    }, 1000);
-
-    return () => {
-      clearTimeout(timer);
-      clearInterval(tickInterval);
-    };
+          // If there are real active items or jobs in production, switch to active command
+          if (json.metrics?.inProduction > 0 || json.metrics?.needsReview > 0 || json.attentionItems?.length > 0) {
+            setViewMode('active');
+          }
+        }
+      } catch {
+        // Keep zero state defaults
+      }
+    }
+    loadDashboard();
   }, []);
 
   return (
     <StudioLayout>
-      {/* View Switcher for Audit & Inspection (Screen 4 vs Screen 32) */}
+      {/* View Switcher for Audit & Inspection (Screen 32 Welcome vs Screen 04 Active Command) */}
       <div className="flex items-center justify-end gap-2 mb-4 text-xs font-mono cut-in">
         <span className="text-[#6B7280]">View:</span>
-        <button
-          type="button"
-          onClick={() => setViewMode('active')}
-          className={`px-2.5 py-1 rounded-lg transition-colors btn-press ${
-            viewMode === 'active'
-              ? 'bg-[#1F242D] text-white border border-[#2E333D]'
-              : 'text-[#9CA3AF] hover:text-white'
-          }`}
-        >
-          Screen 04: Active Command
-        </button>
         <button
           type="button"
           onClick={() => setViewMode('welcome')}
@@ -63,20 +103,33 @@ export default function OverviewPage() {
         >
           Screen 32: Welcome State
         </button>
+        <button
+          type="button"
+          onClick={() => setViewMode('active')}
+          className={`px-2.5 py-1 rounded-lg transition-colors btn-press ${
+            viewMode === 'active'
+              ? 'bg-[#1F242D] text-white border border-[#2E333D]'
+              : 'text-[#9CA3AF] hover:text-white'
+          }`}
+        >
+          Screen 04: Active Command
+        </button>
       </div>
 
       {viewMode === 'welcome' ? (
-        /* Screen 32: Welcome / Empty State */
+        /* Screen 32: Welcome / Genuine Zero State */
         <div className="max-w-4xl mx-auto py-8 cut-in">
           <div className="mb-8">
-            <h1 className="text-3xl font-bold tracking-tight text-white mb-2">Welcome to Cutline</h1>
+            <h1 className="text-3xl font-bold tracking-tight text-white mb-2">
+              Welcome to Cutline, {firstName}
+            </h1>
             <p className="text-sm text-[#9CA3AF]">
               Four steps to your first published video. You can take them in any order.
             </p>
           </div>
 
           <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-            {/* Action Card 1: New Project (Storyboard Draw) */}
+            {/* Action Card 1: New Project */}
             <div className="bg-[#121417] border border-dashed border-[#E5A93C]/40 hover:border-[#E5A93C] rounded-2xl p-6 flex flex-col justify-between hover:-translate-y-0.5 hover:shadow-xl transition-all duration-200">
               <div>
                 <div className="flex items-center gap-2 mb-1">
@@ -84,7 +137,7 @@ export default function OverviewPage() {
                   <h2 className="text-base font-semibold text-white">New project</h2>
                 </div>
                 <p className="text-xs text-[#9CA3AF] mb-6">
-                  Start a project. Blank or from a sample documentary template.
+                  Start a project. Blank or from a documentary / episodic series template.
                 </p>
               </div>
               <Link
@@ -100,7 +153,6 @@ export default function OverviewPage() {
               <div>
                 <div className="flex items-center justify-between mb-1">
                   <h2 className="text-base font-semibold text-white flex items-center gap-2">
-                    {/* SVG Readiness Ring */}
                     <svg className="w-5 h-5 -rotate-90" viewBox="0 0 36 36">
                       <path
                         className="text-[#22262E]"
@@ -174,8 +226,14 @@ export default function OverviewPage() {
           {/* Page Header */}
           <div className="flex flex-col md:flex-row md:items-center justify-between gap-4 mb-8">
             <div>
-              <h1 className="text-3xl font-bold tracking-tight text-white">Good evening, Ade</h1>
-              <p className="text-sm text-[#9CA3AF] mt-1 font-mono">Three things need you. Two jobs are running.</p>
+              <h1 className="text-3xl font-bold tracking-tight text-white">
+                Good evening, {firstName}
+              </h1>
+              <p className="text-sm text-[#9CA3AF] mt-1 font-mono">
+                {attentionItems.length > 0
+                  ? `${attentionItems.length} items need your attention. ${metrics.inProduction} jobs running.`
+                  : 'Workspace idle. 0 jobs running.'}
+              </p>
             </div>
             <Link
               href="/projects/new"
@@ -185,38 +243,38 @@ export default function OverviewPage() {
             </Link>
           </div>
 
-          {/* Top 4 Metrics Row with Number Roll & Card Lift */}
+          {/* Top 4 Metrics Row */}
           <div className="grid grid-cols-2 lg:grid-cols-4 gap-4 mb-8">
             <div className="bg-[#121417] border border-[#22262E] rounded-xl p-5 hover:-translate-y-0.5 hover:shadow-lg transition-all duration-200">
               <div className="text-xs font-mono uppercase tracking-wider text-[#9CA3AF] mb-2">IN PRODUCTION</div>
               <div className="text-3xl font-bold text-white mb-2 transition-all duration-500 font-mono">
-                {counts.inProduction}
+                {metrics.inProduction}
               </div>
-              <div className="text-xs text-[#9CA3AF] font-mono">2 running, 1 queued</div>
+              <div className="text-xs text-[#9CA3AF] font-mono">{metrics.runningDetail}</div>
             </div>
 
             <div className="bg-[#121417] border border-[#22262E] rounded-xl p-5 hover:-translate-y-0.5 hover:shadow-lg transition-all duration-200">
               <div className="text-xs font-mono uppercase tracking-wider text-[#9CA3AF] mb-2">NEEDS REVIEW</div>
               <div className="text-3xl font-bold text-white mb-2 transition-all duration-500 font-mono">
-                {counts.needsReview}
+                {metrics.needsReview}
               </div>
-              <div className="text-xs text-[#9CA3AF] font-mono">oldest 3h ago</div>
+              <div className="text-xs text-[#9CA3AF] font-mono">oldest: {metrics.oldestReview}</div>
             </div>
 
             <div className="bg-[#121417] border border-[#22262E] rounded-xl p-5 hover:-translate-y-0.5 hover:shadow-lg transition-all duration-200">
               <div className="text-xs font-mono uppercase tracking-wider text-[#9CA3AF] mb-2">SCHEDULED</div>
               <div className="text-3xl font-bold text-white mb-2 transition-all duration-500 font-mono">
-                {counts.scheduled}
+                {metrics.scheduled}
               </div>
-              <div className="text-xs text-[#9CA3AF] font-mono">next Fri 18:00 WAT</div>
+              <div className="text-xs text-[#9CA3AF] font-mono">{metrics.nextScheduled}</div>
             </div>
 
             <div className="bg-[#121417] border border-[#22262E] rounded-xl p-5 hover:-translate-y-0.5 hover:shadow-lg transition-all duration-200">
               <div className="text-xs font-mono uppercase tracking-wider text-[#9CA3AF] mb-2">SPEND, OCT</div>
               <div className="text-3xl font-bold text-white mb-2 transition-all duration-500 font-mono">
-                ${counts.spend}
+                ${metrics.spendOctUsd.toFixed(2)}
               </div>
-              <div className="text-xs text-[#34D399] font-mono">provider-reported</div>
+              <div className="text-xs text-[#34D399] font-mono">{metrics.spendReportType}</div>
             </div>
           </div>
 
@@ -224,110 +282,100 @@ export default function OverviewPage() {
           <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
             {/* Left 2 Columns: Attention & Processing */}
             <div className="lg:col-span-2 space-y-6">
-              {/* Needs Attention with Attention Breathe Motif */}
               <div className="bg-[#121417] border border-[#22262E] rounded-2xl p-6">
                 <h2 className="text-base font-semibold text-white mb-4">Needs your attention</h2>
-                <div className="space-y-4">
-                  <div className="flex items-center justify-between p-3.5 rounded-xl bg-[#181B20]/60 border border-[#22262E] hover:border-[#383E4C] transition-colors">
-                    <div className="flex items-start gap-3">
-                      <span className="w-2.5 h-2.5 rounded-full bg-[#F87171] mt-1.5 breathe-live shadow-[0_0_8px_rgba(248,113,113,0.6)]" />
-                      <div>
-                        <div className="text-sm font-medium text-white">EP 07 awaiting final review</div>
-                        <div className="text-xs text-[#9CA3AF] font-mono">Lagos After Dark</div>
+                {attentionItems.length > 0 ? (
+                  <div className="space-y-4">
+                    {attentionItems.map((item) => (
+                      <div
+                        key={item.id}
+                        className="flex items-center justify-between p-3.5 rounded-xl bg-[#181B20]/60 border border-[#22262E] hover:border-[#383E4C] transition-colors"
+                      >
+                        <div className="flex items-start gap-3">
+                          <span
+                            className={`w-2.5 h-2.5 rounded-full mt-1.5 breathe-live ${
+                              item.statusColor === 'red'
+                                ? 'bg-[#F87171] shadow-[0_0_8px_rgba(248,113,113,0.6)]'
+                                : 'bg-[#FBBF24] shadow-[0_0_8px_rgba(251,191,36,0.6)]'
+                            }`}
+                          />
+                          <div>
+                            <div className="text-sm font-medium text-white">{item.title}</div>
+                            <div className="text-xs text-[#9CA3AF] font-mono">{item.subtitle}</div>
+                          </div>
+                        </div>
+                        <Link
+                          href={item.actionHref}
+                          className="px-3.5 py-1.5 rounded-lg border border-[#2E333D] hover:bg-[#22262E] text-xs font-medium text-white transition-colors btn-press"
+                        >
+                          {item.actionLabel}
+                        </Link>
                       </div>
-                    </div>
-                    <Link
-                      href="/projects/lagos-after-dark/episodes/7/review"
-                      className="px-3.5 py-1.5 rounded-lg border border-[#2E333D] hover:bg-[#22262E] text-xs font-medium text-white transition-colors btn-press"
-                    >
-                      Review
-                    </Link>
+                    ))}
                   </div>
-
-                  <div className="flex items-center justify-between p-3.5 rounded-xl bg-[#181B20]/60 border border-[#22262E] hover:border-[#383E4C] transition-colors">
-                    <div className="flex items-start gap-3">
-                      <span className="w-2.5 h-2.5 rounded-full bg-[#F87171] mt-1.5 breathe-live shadow-[0_0_8px_rgba(248,113,113,0.6)]" />
-                      <div>
-                        <div className="text-sm font-medium text-white">Scene 4 render failed</div>
-                        <div className="text-xs text-[#9CA3AF] font-mono">Provider rejected duration</div>
-                      </div>
-                    </div>
-                    <Link
-                      href="/projects/lagos-after-dark/episodes/7/scenes"
-                      className="px-3.5 py-1.5 rounded-lg border border-[#2E333D] hover:bg-[#22262E] text-xs font-medium text-white transition-colors btn-press"
-                    >
-                      Retry
-                    </Link>
+                ) : (
+                  <div className="p-6 text-center rounded-xl bg-[#181B20]/40 border border-[#22262E] text-xs text-[#9CA3AF]">
+                    ✓ All clear. No releases awaiting gate approval or failed renders.
                   </div>
+                )}
 
-                  <div className="flex items-center justify-between p-3.5 rounded-xl bg-[#181B20]/60 border border-[#22262E] hover:border-[#383E4C] transition-colors">
-                    <div className="flex items-start gap-3">
-                      <span className="w-2.5 h-2.5 rounded-full bg-[#FBBF24] mt-1.5 breathe-live shadow-[0_0_8px_rgba(251,191,36,0.6)]" />
-                      <div>
-                        <div className="text-sm font-medium text-white">Thumbnail missing for EP 06</div>
-                        <div className="text-xs text-[#9CA3AF] font-mono">Needed before scheduling</div>
-                      </div>
-                    </div>
-                    <Link
-                      href="/projects/lagos-after-dark/episodes/7/assets"
-                      className="px-3.5 py-1.5 rounded-lg border border-[#2E333D] hover:bg-[#22262E] text-xs font-medium text-white transition-colors btn-press"
-                    >
-                      Add
-                    </Link>
-                  </div>
-                </div>
-
-                {/* Processing Now (Live Row Swap) */}
+                {/* Processing Now */}
                 <h3 className="text-sm font-semibold text-white mt-8 mb-4">Processing now</h3>
-                <div className="space-y-3">
-                  <div className="flex items-center justify-between py-2 border-b border-[#1C2028]">
-                    <span className="text-sm text-white">EP 08 · scene 3 of 7</span>
-                    <div className="flex items-center gap-3">
-                      <StatusPill label="waiting_for_provider" variant="blue" />
-                      <span className="text-xs text-[#9CA3AF] font-mono">updated {secondsAgo}s ago</span>
-                    </div>
+                {processingNow.length > 0 ? (
+                  <div className="space-y-3">
+                    {processingNow.map((job) => (
+                      <div key={job.id} className="flex items-center justify-between py-2 border-b border-[#1C2028]">
+                        <span className="text-sm text-white">{job.title}</span>
+                        <div className="flex items-center gap-3">
+                          <StatusPill label={job.stageLabel} variant="blue" />
+                          <span className="text-xs text-[#9CA3AF] font-mono">{job.updatedAgo}</span>
+                        </div>
+                      </div>
+                    ))}
                   </div>
-                  <div className="flex items-center justify-between py-2">
-                    <span className="text-sm text-white">EP 05 · assembling</span>
-                    <div className="flex items-center gap-3">
-                      <StatusPill label="running" variant="blue" />
-                      <span className="text-xs text-[#9CA3AF] font-mono">updated 2m ago</span>
-                    </div>
+                ) : (
+                  <div className="p-4 text-center rounded-xl bg-[#181B20]/40 border border-[#22262E] text-xs text-[#9CA3AF]">
+                    Queue idle. No rendering workers active.
                   </div>
-                </div>
+                )}
               </div>
             </div>
 
             {/* Right 1 Column: Upcoming & Connections */}
             <div className="space-y-6">
-              {/* Upcoming Card */}
               <div className="bg-[#121417] border border-[#22262E] rounded-2xl p-6 hover:-translate-y-0.5 hover:shadow-lg transition-all duration-200">
                 <h2 className="text-base font-semibold text-white mb-4">Upcoming</h2>
-                <div className="space-y-3">
-                  <div className="flex items-center justify-between py-2 border-b border-[#1C2028]">
-                    <span className="text-sm text-white">EP 06 · Fri 18:00</span>
-                    <StatusPill label="Scheduled" variant="green" />
+                {upcoming.length > 0 ? (
+                  <div className="space-y-3">
+                    {upcoming.map((u, i) => (
+                      <div key={i} className="flex items-center justify-between py-2 border-b border-[#1C2028]">
+                        <span className="text-sm text-white">{u.episode} · {u.time}</span>
+                        <StatusPill label={u.status} variant="green" />
+                      </div>
+                    ))}
                   </div>
-                  <div className="flex items-center justify-between py-2 border-b border-[#1C2028]">
-                    <span className="text-sm text-white">EP 05 · Sun 09:00</span>
-                    <StatusPill label="Scheduled" variant="green" />
+                ) : (
+                  <div className="p-4 text-center rounded-xl bg-[#181B20]/40 border border-[#22262E] text-xs text-[#9CA3AF]">
+                    No videos scheduled for publishing.
                   </div>
-                  <div className="flex items-center justify-between py-2">
-                    <span className="text-sm text-white">EP 04 · draft</span>
-                    <StatusPill label="Draft" variant="gray" />
-                  </div>
-                </div>
+                )}
 
                 {/* Connections Health */}
                 <h3 className="text-sm font-semibold text-white mt-8 mb-4">Connections</h3>
                 <div className="space-y-3">
                   <div className="flex items-center justify-between py-2 border-b border-[#1C2028]">
                     <span className="text-sm text-white">YouTube token</span>
-                    <StatusPill label="expires soon" variant="amber" />
+                    <StatusPill
+                      label={connections.youtubeToken}
+                      variant={connections.youtubeToken === 'connected' ? 'green' : 'gray'}
+                    />
                   </div>
                   <div className="flex items-center justify-between py-2">
                     <span className="text-sm text-white">PixVerse</span>
-                    <StatusPill label="healthy" variant="green" />
+                    <StatusPill
+                      label={connections.pixverse}
+                      variant={connections.pixverse === 'healthy' ? 'green' : 'gray'}
+                    />
                   </div>
                 </div>
               </div>

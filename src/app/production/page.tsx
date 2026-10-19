@@ -22,56 +22,7 @@ export default function ProductionQueuePage() {
   const [filter, setFilter] = useState<'all' | 'running' | 'queued' | 'failed' | 'done'>('all');
   const [swipedJobId, setSwipedJobId] = useState<string | null>(null);
 
-  const [jobs, setJobs] = useState<ProductionJob[]>([
-    {
-      id: 'job_8f29d',
-      project: 'Lagos After Dark',
-      episode: 'EP 07',
-      scene: 'Scene 06 · Market montage',
-      provider: 'PixVerse',
-      step: 'Video rendering',
-      duration: '8s',
-      status: 'running',
-      worker: 'worker-pod-02',
-      timeInState: '42s ago',
-    },
-    {
-      id: 'job_3a10c',
-      project: 'Lagos After Dark',
-      episode: 'EP 07',
-      scene: 'Scene 07 · Closing shot',
-      provider: 'PixVerse',
-      step: 'Queued for dispatch',
-      duration: '5s',
-      status: 'queued',
-      worker: 'unassigned',
-      timeInState: '2m ago',
-    },
-    {
-      id: 'job_9c44b',
-      project: 'Tokyo Neon Stories',
-      episode: 'EP 02',
-      scene: 'Scene 04 · Shibuya rain',
-      provider: 'ElevenLabs',
-      step: 'TTS narration generation',
-      duration: '14s',
-      status: 'done',
-      worker: 'worker-pod-01',
-      timeInState: '15m ago',
-    },
-    {
-      id: 'job_11e2f',
-      project: 'Lagos After Dark',
-      episode: 'EP 07',
-      scene: 'Scene 04 · Rain on Third Mainland',
-      provider: 'PixVerse',
-      step: 'Validation rejected: 12s exceeds 8s limit',
-      duration: '12s',
-      status: 'failed',
-      worker: 'dispatcher',
-      timeInState: '1h ago',
-    },
-  ]);
+  const [jobs, setJobs] = useState<ProductionJob[]>([]);
 
   const handleRetry = (jobId: string) => {
     if (typeof navigator !== 'undefined' && 'vibrate' in navigator) {
@@ -203,7 +154,24 @@ export default function ProductionQueuePage() {
 
       {/* Jobs List with Live Dot, Row Flip & Swipe Actions */}
       <div className="space-y-3 cut-in">
-        {filteredJobs.map((job) => (
+        {filteredJobs.length === 0 ? (
+          <div className="bg-[#121417] border border-[#22262E] rounded-2xl p-12 text-center max-w-lg mx-auto cut-in">
+            <div className="w-12 h-12 rounded-xl bg-[#1A1D23] border border-[#22262E] flex items-center justify-center text-xl mx-auto mb-4 text-[#34D399]">
+              ⚡
+            </div>
+            <h3 className="text-lg font-bold text-white mb-2">Queue is clear</h3>
+            <p className="text-xs text-[#9CA3AF] mb-6 leading-relaxed">
+              No rendering jobs, TTS generations, or video assembly tasks currently in progress. Dispatch a scene render from your Episode Scene Planner to begin.
+            </p>
+            <Link
+              href="/projects"
+              className="inline-flex items-center gap-2 bg-[#E5A93C] hover:bg-[#F0B84D] text-[#0B0C0E] font-semibold text-xs px-5 py-2.5 rounded-xl transition-colors btn-press shadow-md"
+            >
+              Go to Projects
+            </Link>
+          </div>
+        ) : (
+          filteredJobs.map((job) => (
           <div
             key={job.id}
             className={`bg-[#121417] border border-[#22262E] hover:border-[#2E333D] rounded-2xl p-4 md:p-5 transition-all duration-200 relative overflow-hidden ${
@@ -297,7 +265,7 @@ export default function ProductionQueuePage() {
               </div>
             )}
           </div>
-        ))}
+        )))}
       </div>
     </StudioLayout>
   );

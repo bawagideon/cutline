@@ -12,6 +12,7 @@
     "test": "node --test --experimental-strip-types tests/crypto-vault.test.ts tests/render-provider.test.ts tests/safe-downloader.test.ts tests/worker-queue.test.ts tests/tenant-isolation.test.ts"
   },
   "dependencies": {
+    "@clerk/nextjs": "^7.9.17",
     "@google/genai": "^2.13.0",
     "@supabase/supabase-js": "^2.48.0",
     "clsx": "^2.1.1",

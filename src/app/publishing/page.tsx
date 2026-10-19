@@ -5,11 +5,11 @@ import { StudioLayout } from '@/components/layout/StudioLayout';
 import { StatusPill } from '@/components/ui/StatusPill';
 
 export default function PublishingCalendarPage() {
-  const [hasInterruptedUpload, setHasInterruptedUpload] = useState(true);
+  const [hasInterruptedUpload, setHasInterruptedUpload] = useState(false);
   const [isResuming, setIsResuming] = useState(false);
   const [resumedSuccess, setResumedSuccess] = useState(false);
   const [isScheduleModalOpen, setIsScheduleModalOpen] = useState(false);
-  const [scheduleTitle, setScheduleTitle] = useState('The Last Danfo');
+  const [scheduleTitle, setScheduleTitle] = useState('New Episode');
   const [scheduleDate, setScheduleDate] = useState('Fri, Oct 23');
   const [scheduleTime, setScheduleTime] = useState('18:00');
   const [scheduleVisibility, setScheduleVisibility] = useState<'Private' | 'Unlisted' | 'Public'>('Unlisted');
@@ -24,26 +24,17 @@ export default function PublishingCalendarPage() {
     }, 1200);
   };
 
-  const scheduledSlots = [
-    {
-      date: 'Thursday, Oct 22',
-      time: '18:00 WAT (UTC+1)',
-      episode: 'EP 07 · The Last Danfo',
-      project: 'Lagos After Dark',
-      channel: 'Lagos Underground (Verified)',
-      status: 'Ready',
-      quotaUnits: '1,600 units',
-    },
-    {
-      date: 'Sunday, Oct 25',
-      time: '20:00 WAT (UTC+1)',
-      episode: 'EP 08 · Floating Slums of Makoko',
-      project: 'Lagos After Dark',
-      channel: 'Lagos Underground (Verified)',
-      status: 'Draft',
-      quotaUnits: '1,600 units est.',
-    },
-  ];
+  interface ScheduledSlot {
+    date: string;
+    time: string;
+    episode: string;
+    project: string;
+    channel: string;
+    status: string;
+    quotaUnits: string;
+  }
+
+  const [scheduledSlots] = useState<ScheduledSlot[]>([]);
 
   return (
     <StudioLayout>
@@ -54,7 +45,7 @@ export default function PublishingCalendarPage() {
             Publishing calendar
           </h1>
           <p className="text-xs md:text-sm text-[#9CA3AF] mt-1 font-mono">
-            Timezone: Africa/Lagos (WAT, UTC+1) · 2 slots planned
+            {scheduledSlots.length} slots planned · Approvals gate enabled
           </p>
         </div>
 
@@ -126,46 +117,65 @@ export default function PublishingCalendarPage() {
 
       {/* Scheduled Releases Table */}
       <div className="bg-[#121417] border border-[#22262E] rounded-2xl overflow-hidden divide-y divide-[#1C2028]">
-        {scheduledSlots.map((slot, idx) => (
-          <div
-            key={idx}
-            className="p-5 flex flex-col md:flex-row md:items-center justify-between gap-4 hover:bg-[#15181D] transition-colors"
-          >
-            <div>
-              <div className="flex items-center gap-3">
-                <span className="text-sm font-semibold text-white">
-                  {slot.date}
-                </span>
-                <span className="text-xs font-mono text-[#E5A93C]">
-                  {slot.time}
-                </span>
-                <StatusPill
-                  label={slot.status}
-                  variant={slot.status === 'Ready' ? 'green' : 'gray'}
-                />
-              </div>
-
-              <div className="text-base font-medium text-white mt-1">
-                {slot.episode}
-              </div>
-              <div className="text-xs text-[#9CA3AF] font-mono mt-0.5">
-                Channel: {slot.channel} · Project: {slot.project}
-              </div>
+        {scheduledSlots.length === 0 ? (
+          <div className="p-12 text-center max-w-lg mx-auto">
+            <div className="w-12 h-12 rounded-xl bg-[#1A1D23] border border-[#22262E] flex items-center justify-center text-xl text-[#E5A93C] mx-auto mb-4">
+              📅
             </div>
-
-            <div className="flex items-center gap-4 self-end md:self-center">
-              <span className="text-xs font-mono text-[#9CA3AF]">
-                Quota: {slot.quotaUnits}
-              </span>
-              <button
-                type="button"
-                className="border border-[#2E333D] hover:bg-[#181B20] text-xs font-medium text-white px-3.5 py-1.5 rounded-lg transition-colors"
-              >
-                Edit slot
-              </button>
-            </div>
+            <h3 className="text-base font-semibold text-white mb-2">No releases scheduled</h3>
+            <p className="text-xs text-[#9CA3AF] mb-6 leading-relaxed">
+              Videos approved at the review gate will appear here with scheduled drop times, timezone alignment, and YouTube quota estimates.
+            </p>
+            <button
+              type="button"
+              onClick={() => setIsScheduleModalOpen(true)}
+              className="bg-[#E5A93C] hover:bg-[#F0B84D] text-[#0B0C0E] font-semibold text-xs px-4 py-2 rounded-lg transition-colors btn-press shadow-sm"
+            >
+              + Schedule release
+            </button>
           </div>
-        ))}
+        ) : (
+          scheduledSlots.map((slot, idx) => (
+            <div
+              key={idx}
+              className="p-5 flex flex-col md:flex-row md:items-center justify-between gap-4 hover:bg-[#15181D] transition-colors"
+            >
+              <div>
+                <div className="flex items-center gap-3">
+                  <span className="text-sm font-semibold text-white">
+                    {slot.date}
+                  </span>
+                  <span className="text-xs font-mono text-[#E5A93C]">
+                    {slot.time}
+                  </span>
+                  <StatusPill
+                    label={slot.status}
+                    variant={slot.status === 'Ready' ? 'green' : 'gray'}
+                  />
+                </div>
+
+                <div className="text-base font-medium text-white mt-1">
+                  {slot.episode}
+                </div>
+                <div className="text-xs text-[#9CA3AF] font-mono mt-0.5">
+                  Channel: {slot.channel} · Project: {slot.project}
+                </div>
+              </div>
+
+              <div className="flex items-center gap-4 self-end md:self-center">
+                <span className="text-xs font-mono text-[#9CA3AF]">
+                  Quota: {slot.quotaUnits}
+                </span>
+                <button
+                  type="button"
+                  className="border border-[#2E333D] hover:bg-[#181B20] text-xs font-medium text-white px-3.5 py-1.5 rounded-lg transition-colors"
+                >
+                  Edit slot
+                </button>
+              </div>
+            </div>
+          ))
+        )}
       </div>
 
       {/* Screen 37: Publishing Schedule Modal Dialog */}

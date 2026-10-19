@@ -80,4 +80,22 @@ describe('Multi-Tenant Session & Workspace Isolation', () => {
     assert.equal(forbidden.name, 'ForbiddenError');
     assert.equal(forbidden.message, 'Tenant breach rejected');
   });
+
+  it('deterministically maps Clerk user IDs to valid PostgreSQL UUID format', async () => {
+    const { clerkIdToUuid } = await import('../src/lib/auth/session.ts');
+    const clerkId = 'user_2tXyZ9AbCdEf123456';
+    const uuid1 = clerkIdToUuid(clerkId);
+    const uuid2 = clerkIdToUuid(clerkId);
+
+    // Assert determinism
+    assert.equal(uuid1, uuid2, 'Clerk ID mapping must be deterministic');
+
+    // Assert UUID format: 8-4-4-4-12
+    const uuidRegex = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+    assert.match(uuid1, uuidRegex, 'Result must match valid UUID format');
+
+    // Assert different Clerk IDs generate distinct UUIDs (collision resistance)
+    const otherUuid = clerkIdToUuid('user_99DifferentCreator');
+    assert.notEqual(uuid1, otherUuid, 'Different users must yield distinct tenant UUIDs');
+  });
 });

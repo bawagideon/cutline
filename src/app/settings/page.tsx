@@ -1,13 +1,23 @@
 'use client';
 
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
+import Image from 'next/image';
+import { useUser } from '@clerk/nextjs';
 
 export default function ProfileSettingsPage() {
-  const [displayName, setDisplayName] = useState('Ade Okafor');
-  const [email, setEmail] = useState('ade@studio.com');
+  const { user } = useUser();
+  const [displayName, setDisplayName] = useState('');
+  const [email, setEmail] = useState('');
   const [timezone, setTimezone] = useState('Africa/Lagos (WAT)');
   const [theme, setTheme] = useState<'Dark' | 'Light' | 'System'>('Dark');
   const [saved, setSaved] = useState(false);
+
+  useEffect(() => {
+    if (user) {
+      setDisplayName(user.fullName || user.firstName || 'Creator');
+      setEmail(user.primaryEmailAddress?.emailAddress || '');
+    }
+  }, [user]);
 
   const handleSave = (e: React.FormEvent) => {
     e.preventDefault();
@@ -15,21 +25,29 @@ export default function ProfileSettingsPage() {
     setTimeout(() => setSaved(false), 2500);
   };
 
+  const avatarLetter = displayName ? displayName.charAt(0).toUpperCase() : 'C';
+
   return (
     <div className="bg-[#121417] border border-[#22262E] rounded-2xl p-6 md:p-8 space-y-6">
       <div className="flex items-center gap-5 pb-6 border-b border-[#1C2028]">
-        <div className="w-16 h-16 rounded-full bg-[#181B20] border border-[#2E333D] flex items-center justify-center text-xl font-bold text-[#E5A93C]">
-          A
-        </div>
+        {user?.imageUrl ? (
+          <Image
+            src={user.imageUrl}
+            alt={displayName}
+            width={64}
+            height={64}
+            unoptimized
+            className="w-16 h-16 rounded-full border border-[#2E333D] object-cover"
+          />
+        ) : (
+          <div className="w-16 h-16 rounded-full bg-[#181B20] border border-[#2E333D] flex items-center justify-center text-xl font-bold text-[#E5A93C]">
+            {avatarLetter}
+          </div>
+        )}
         <div>
-          <button
-            type="button"
-            className="border border-[#2E333D] hover:bg-[#181B20] text-xs font-medium text-white px-3.5 py-1.5 rounded-lg transition-colors"
-          >
-            Change photo
-          </button>
-          <p className="text-[11px] font-mono text-[#6B7280] mt-1.5">
-            JPG, PNG or WebP under 2MB
+          <div className="text-sm font-semibold text-white">{displayName || 'Creator'}</div>
+          <p className="text-[11px] font-mono text-[#6B7280] mt-0.5">
+            Managed via Clerk Authentication
           </p>
         </div>
       </div>

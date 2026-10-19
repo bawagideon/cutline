@@ -1,4 +1,5 @@
 import type { NextRequest } from 'next/server';
+import crypto from 'node:crypto';
 import { getSupabaseClient, getSupabaseServiceClient } from '../database/client.ts';
 
 export interface AuthSession {
@@ -20,6 +21,14 @@ export class ForbiddenError extends Error {
     super(message);
     this.name = 'ForbiddenError';
   }
+}
+
+/**
+ * Maps Clerk user ID string into a deterministic UUID for PostgreSQL foreign keys.
+ */
+export function clerkIdToUuid(clerkId: string): string {
+  const hash = crypto.createHash('sha256').update(`clerk:${clerkId}`).digest('hex');
+  return `${hash.slice(0, 8)}-${hash.slice(8, 12)}-${hash.slice(12, 16)}-${hash.slice(16, 20)}-${hash.slice(20, 32)}`;
 }
 
 /**
@@ -46,13 +55,104 @@ export function extractToken(req: {
 /**
  * Validates request authorization and workspace access.
  * Strictly enforces per-user tenant isolation:
- * - Never returns a shared hardcoded fallback workspace.
+ * - Supports Clerk server authentication and token/cookie sessions.
  * - Automatically provisions an isolated personal workspace if a valid user has none.
  */
 export async function authenticateRequest(
   req: NextRequest,
   requiredWorkspaceId?: string
 ): Promise<AuthSession> {
+  // 1. Inspect Clerk session in Next.js runtime context
+  try {
+    const clerkModule = await import('@clerk/nextjs/server');
+    if (clerkModule && typeof clerkModule.auth === 'function') {
+      const clerkAuth = await clerkModule.auth();
+      if (clerkAuth && clerkAuth.userId) {
+        const userId = clerkIdToUuid(clerkAuth.userId);
+        let userEmail = 'creator@cutline.studio';
+        try {
+          if (typeof clerkModule.currentUser === 'function') {
+            const u = await clerkModule.currentUser();
+            if (u?.emailAddresses?.[0]?.emailAddress) {
+              userEmail = u.emailAddresses[0].emailAddress;
+            }
+          }
+        } catch {
+          // ignore currentUser lookup error
+        }
+
+        const serviceDb = getSupabaseServiceClient();
+
+        if (requiredWorkspaceId) {
+          const { data: membership, error: memberError } = await serviceDb
+            .from('workspace_members')
+            .select('role')
+            .eq('workspace_id', requiredWorkspaceId)
+            .eq('user_id', userId)
+            .single();
+
+          if (memberError || !membership) {
+            throw new ForbiddenError('You do not have permission to access this workspace.');
+          }
+
+          return {
+            userId,
+            email: userEmail,
+            workspaceId: requiredWorkspaceId,
+            role: membership.role as AuthSession['role'],
+          };
+        }
+
+        const { data: existingMembership } = await serviceDb
+          .from('workspace_members')
+          .select('workspace_id, role')
+          .eq('user_id', userId)
+          .order('created_at', { ascending: true })
+          .limit(1)
+          .single();
+
+        if (existingMembership) {
+          return {
+            userId,
+            email: userEmail,
+            workspaceId: existingMembership.workspace_id,
+            role: existingMembership.role as AuthSession['role'],
+          };
+        }
+
+        // Auto-provision personal workspace for Clerk user
+        const { data: newWorkspace } = await serviceDb
+          .from('workspaces')
+          .insert({
+            name: 'Personal Studio',
+            owner_id: userId,
+          })
+          .select()
+          .single();
+
+        if (newWorkspace) {
+          await serviceDb.from('workspace_members').insert({
+            workspace_id: newWorkspace.id,
+            user_id: userId,
+            role: 'owner',
+          });
+
+          return {
+            userId,
+            email: userEmail,
+            workspaceId: newWorkspace.id,
+            role: 'owner',
+          };
+        }
+      }
+    }
+  } catch (err: unknown) {
+    if (err instanceof ForbiddenError) {
+      throw err;
+    }
+    // Fall through to token check
+  }
+
   const token = extractToken(req);
 
   // Check if live Supabase credentials exist

@@ -49,7 +49,7 @@ export default function LandingPage() {
             Sign in
           </Link>
           <Link
-            href="/onboarding"
+            href="/sign-up"
             className="text-sm font-semibold bg-[#E5A93C] text-[#0B0C0E] px-4 py-2 rounded-lg hover:bg-[#F0B84D] transition-colors btn-press shadow-md"
           >
             Start free

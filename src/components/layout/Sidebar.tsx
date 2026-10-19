@@ -3,16 +3,24 @@
 import React from 'react';
 import Link from 'next/link';
 import { usePathname } from 'next/navigation';
-import { performClientSignOut } from '@/lib/auth/client-signout';
+import { useUser, UserButton } from '@clerk/nextjs';
 
 export function Sidebar() {
   const pathname = usePathname();
+  const { user, isLoaded } = useUser();
+
+  const displayName = isLoaded && user
+    ? user.fullName || user.firstName || user.primaryEmailAddress?.emailAddress?.split('@')[0] || 'Creator'
+    : 'Studio Member';
+  const displayWorkspace = isLoaded && user
+    ? 'Personal Studio'
+    : 'Solo workspace';
 
   const navItems = [
     { label: 'Overview', href: '/overview' },
     { label: 'Projects', href: '/projects' },
-    { label: 'Production Queue', href: '/production', badge: '2' },
-    { label: 'Publishing', href: '/publishing', badge: '4' },
+    { label: 'Production Queue', href: '/production' },
+    { label: 'Publishing', href: '/publishing' },
     { label: 'Media Library', href: '/media' },
     { label: 'Channels', href: '/channels' },
     { label: 'Integrations', href: '/integrations' },
@@ -44,15 +52,6 @@ export function Sidebar() {
               }`}
             >
               <span>{item.label}</span>
-              {item.badge && (
-                <span
-                  className={`text-xs px-2 py-0.5 rounded-full font-mono transition-transform duration-150 ${
-                    isActive ? 'bg-[#2D220E] text-[#E5A93C] scale-105' : 'bg-[#181B20] text-[#9CA3AF]'
-                  }`}
-                >
-                  {item.badge}
-                </span>
-              )}
             </Link>
           );
         })}
@@ -73,25 +72,20 @@ export function Sidebar() {
           Setup Checklist
         </Link>
 
-        {/* User Card with Sign-out */}
-        <div className="flex items-center justify-between gap-2 p-2.5 rounded-xl bg-[#121417] border border-[#22262E]">
-          <Link href="/settings" className="flex items-center gap-3 min-w-0 flex-1 hover:opacity-85 transition-opacity">
-            <div className="w-8 h-8 rounded-full bg-[#1F242D] border border-[#2E333D] flex items-center justify-center text-xs font-semibold text-[#E5A93C]">
-              A
-            </div>
-            <div className="flex-1 min-w-0">
-              <div className="text-sm font-medium text-white truncate">Ade Okafor</div>
-              <div className="text-xs text-[#9CA3AF] truncate">Solo workspace</div>
-            </div>
-          </Link>
-          <button
-            type="button"
-            title="Sign out"
-            onClick={() => performClientSignOut()}
-            className="p-1.5 text-[#9CA3AF] hover:text-[#F87171] hover:bg-[#181B20] rounded-lg transition-colors text-xs font-mono"
-          >
-            ↪
-          </button>
+        {/* Real Clerk User Profile Card */}
+        <div className="flex items-center justify-between gap-3 p-2.5 rounded-xl bg-[#121417] border border-[#22262E]">
+          <UserButton
+            appearance={{
+              elements: {
+                avatarBox: 'w-8 h-8 rounded-full border border-[#2E333D]',
+                userButtonPopoverCard: 'bg-[#121417] border border-[#22262E] text-white',
+              },
+            }}
+          />
+          <div className="flex-1 min-w-0">
+            <div className="text-sm font-medium text-white truncate">{displayName}</div>
+            <div className="text-xs text-[#9CA3AF] truncate font-mono">{displayWorkspace}</div>
+          </div>
         </div>
       </div>
     </aside>

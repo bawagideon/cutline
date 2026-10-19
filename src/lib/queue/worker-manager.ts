@@ -37,17 +37,30 @@ export interface ProductionJobRecord {
 export class WorkerManager {
   private workerId: string;
   private leaseDurationSec: number;
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  private supabaseClient?: any;
 
-  constructor(workerId = `worker-${Math.random().toString(36).substring(2, 8)}`, leaseDurationSec = 300) {
+  constructor(
+    workerId = `worker-${Math.random().toString(36).substring(2, 8)}`,
+    leaseDurationSec = 300,
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    supabaseClient?: any
+  ) {
     this.workerId = workerId;
     this.leaseDurationSec = leaseDurationSec;
+    this.supabaseClient = supabaseClient;
+  }
+
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  private getSupabase(): any {
+    return this.supabaseClient || getSupabaseServiceClient();
   }
 
   /**
    * Updates worker heartbeat in database so dashboard tracks actual worker liveness.
    */
   async recordHeartbeat(activeJobs = 0): Promise<void> {
-    const supabase = getSupabaseServiceClient();
+    const supabase = this.getSupabase();
     const { error } = await supabase.from('worker_heartbeats').upsert({
       worker_id: this.workerId,
       status: 'healthy',
@@ -74,7 +87,7 @@ export class WorkerManager {
    * Utilizes database RPC with FOR UPDATE SKIP LOCKED or atomic conditional update with fencing tokens.
    */
   async claimNextJob(): Promise<ProductionJobRecord | null> {
-    const supabase = getSupabaseServiceClient();
+    const supabase = this.getSupabase();
     const now = new Date();
     const leaseExpiration = new Date(now.getTime() + this.leaseDurationSec * 1000).toISOString();
     const nowIso = now.toISOString();
@@ -141,7 +154,7 @@ export class WorkerManager {
    * Processes a single job through the canonical pipeline with two-phase paid submission.
    */
   async processJob(job: ProductionJobRecord): Promise<void> {
-    const supabase = getSupabaseServiceClient();
+    const supabase = this.getSupabase();
 
     try {
       if (job.stage === 'started') {
@@ -159,6 +172,7 @@ export class WorkerManager {
           if (advanceError) {
             throw new Error(`Failed to advance job stage: ${advanceError.message}`);
           }
+          job.stage = 'waiting_for_provider';
           return;
         }
 
@@ -166,28 +180,9 @@ export class WorkerManager {
         // If error_message indicates SUBMITTING_RENDER without provider_task_id, a previous worker crashed
         // mid-flight during the paid provider call. Since provider API does not guarantee deduplicated lookup,
         // AUTOMATIC RESUBMISSION IS PROHIBITED to prevent double billing.
-        if (job.error_message === 'SUBMITTING_RENDER') {
+        if (job.error_message === 'SUBMITTING_RENDER' || job.error_message?.includes('Ambiguous render submission')) {
           const ambiguousError = `Ambiguous render submission: Previous worker crashed while submitting render to ${job.provider}. Automatic resubmission blocked to prevent duplicate billing. Manual reconciliation required.`;
-          await this.logJobEvent(job.id, 'error', ambiguousError, {
-            idempotencyKey: job.idempotency_key,
-            attempt: job.attempt,
-          });
-
-          // Transition job to 'failed' with explicit cause to prevent duplicate spend
-          const { error: haltError } = await supabase
-            .from('production_jobs')
-            .update({
-              stage: 'failed',
-              error_message: ambiguousError,
-              locked_by: null,
-              locked_until: null,
-              updated_at: new Date().toISOString(),
-            })
-            .eq('id', job.id);
-
-          if (haltError) {
-            throw new Error(`Failed to record ambiguous submission halt: ${haltError.message}`);
-          }
+          await this.markAmbiguousSubmissionHalt(job, ambiguousError);
           return;
         }
 
@@ -216,35 +211,79 @@ export class WorkerManager {
           throw new Error(`Failed to record render submission intent: ${intentError.message}`);
         }
 
+        // CRITICAL: Update in-memory job state immediately so any failure handler knows intent was persisted
+        job.error_message = 'SUBMITTING_RENDER';
+
         await this.logJobEvent(job.id, 'info', `Submitting render to ${job.provider}`, {
           durationSec: scene.duration_sec,
           idempotencyKey: job.idempotency_key,
         });
 
-        // External provider call passes idempotency key to prevent duplicate render charges
-        const submission = await renderManager.submitRender(job.provider, {
-          prompt: scene.visual_prompt,
-          durationSec: scene.duration_sec,
-          aspectRatio: '16:9',
-          idempotencyKey: job.idempotency_key,
-        });
+        // Phase 2: Call external provider with dedicated error capture
+        let submission;
+        try {
+          // External provider call passes idempotency key to prevent duplicate render charges
+          submission = await renderManager.submitRender(job.provider, {
+            prompt: scene.visual_prompt,
+            durationSec: scene.duration_sec,
+            aspectRatio: '16:9',
+            idempotencyKey: job.idempotency_key,
+          });
+        } catch (providerErr: unknown) {
+          const providerErrMsg = providerErr instanceof Error ? providerErr.message : String(providerErr);
 
-        // Phase 2: Record confirmed provider task ID and transition stage
-        const { error: confirmError } = await supabase
-          .from('production_jobs')
-          .update({
-            stage: 'waiting_for_provider',
-            provider_task_id: submission.providerTaskId,
-            cost_usd: submission.costUsd,
-            cost_type: submission.costType,
-            is_mock: submission.isMock,
-            error_message: null,
-            updated_at: new Date().toISOString(),
-          })
-          .eq('id', job.id);
+          // Check if provider threw a definitive client-side rejection (4xx validation error) where no render was started
+          const isDefinitiveRejection =
+            providerErrMsg.includes('PixVerse HTTP 4') ||
+            providerErrMsg.includes('PixVerse API 4') ||
+            providerErrMsg.includes('PixVerse 8s maximum') ||
+            providerErrMsg.includes('exceeding PixVerse') ||
+            providerErrMsg.includes('not supported') ||
+            providerErrMsg.includes('unimplemented');
 
-        if (confirmError) {
-          throw new Error(`Failed to record provider task confirmation: ${confirmError.message}`);
+          if (isDefinitiveRejection) {
+            await this.markJobFailed(job, `Provider rejected render request: ${providerErrMsg}`);
+            return;
+          }
+
+          // Ambiguous error: provider was contacted and could have accepted the request.
+          // Automatic resubmission is prohibited to prevent duplicate billing.
+          const ambiguousMsg = `Ambiguous render submission: Provider call threw an exception (${providerErrMsg}). Automatic resubmission blocked to prevent duplicate billing. Manual reconciliation required.`;
+          await this.markAmbiguousSubmissionHalt(job, ambiguousMsg);
+          return;
+        }
+
+        // Phase 3: Provider accepted render; confirm task ID in database
+        job.provider_task_id = submission.providerTaskId;
+        job.cost_usd = submission.costUsd;
+        job.cost_type = submission.costType;
+        job.is_mock = submission.isMock;
+
+        try {
+          const { error: confirmError } = await supabase
+            .from('production_jobs')
+            .update({
+              stage: 'waiting_for_provider',
+              provider_task_id: submission.providerTaskId,
+              cost_usd: submission.costUsd,
+              cost_type: submission.costType,
+              is_mock: submission.isMock,
+              error_message: null,
+              updated_at: new Date().toISOString(),
+            })
+            .eq('id', job.id);
+
+          if (confirmError) {
+            throw confirmError;
+          }
+          job.stage = 'waiting_for_provider';
+          job.error_message = undefined;
+        } catch (dbConfirmErr: unknown) {
+          // Provider accepted the render, but saving task ID failed! Automatic resubmission must be blocked!
+          const dbErrMsg = dbConfirmErr instanceof Error ? dbConfirmErr.message : String(dbConfirmErr);
+          const confirmFailMsg = `Ambiguous render confirmation failure: Provider accepted render (task=${submission.providerTaskId}), but saving task ID failed (${dbErrMsg}). Automatic resubmission blocked.`;
+          await this.markAmbiguousSubmissionHalt(job, confirmFailMsg, submission.providerTaskId);
+          return;
         }
 
         await this.logJobEvent(job.id, 'info', `task=${submission.providerTaskId} accepted by provider`);
@@ -320,15 +359,100 @@ export class WorkerManager {
     }
   }
 
-  private async handleJobFailure(job: ProductionJobRecord, errorMessage: string): Promise<void> {
-    const supabase = getSupabaseServiceClient();
-    const nextAttempt = job.attempt + 1;
-    const isAmbiguousSubmission = errorMessage.includes('Ambiguous render state') ||
-      (job.stage === 'started' && errorMessage.includes('SUBMITTING_RENDER'));
-    const isExplicitProviderFailure = errorMessage.includes('Provider reported render failure') ||
-      errorMessage.includes('PixVerse HTTP 4');
+  /**
+   * Halts resubmission of a job when an ambiguous provider state occurs.
+   * Transitions job to 'failed' to prevent duplicate spend, records diagnostic message,
+   * and preserves provider_task_id if one was already returned.
+   */
+  async markAmbiguousSubmissionHalt(job: ProductionJobRecord, message: string, providerTaskId?: string): Promise<void> {
+    const supabase = this.getSupabase();
+    job.stage = 'failed';
+    job.error_message = message;
+    if (providerTaskId) {
+      job.provider_task_id = providerTaskId;
+    }
 
-    const canRetry = nextAttempt <= job.max_attempts && !isExplicitProviderFailure && !isAmbiguousSubmission;
+    await this.logJobEvent(job.id, 'error', message, {
+      idempotencyKey: job.idempotency_key,
+      attempt: job.attempt,
+      providerTaskId: providerTaskId || job.provider_task_id,
+    });
+
+    const updatePayload: Record<string, unknown> = {
+      stage: 'failed',
+      error_message: message,
+      locked_by: null,
+      locked_until: null,
+      updated_at: new Date().toISOString(),
+    };
+    if (providerTaskId) {
+      updatePayload.provider_task_id = providerTaskId;
+    }
+
+    const { error } = await supabase
+      .from('production_jobs')
+      .update(updatePayload)
+      .eq('id', job.id);
+
+    if (error) {
+      console.error(`[Worker Error] Failed to persist ambiguous submission halt for job ${job.id}: ${error.message}`);
+    }
+  }
+
+  /**
+   * Transitions a job to 'failed' permanently (non-retryable).
+   */
+  async markJobFailed(job: ProductionJobRecord, message: string): Promise<void> {
+    const supabase = this.getSupabase();
+    job.stage = 'failed';
+    job.error_message = message;
+
+    await this.logJobEvent(job.id, 'error', message, {
+      attempt: job.attempt,
+    });
+
+    const { error } = await supabase
+      .from('production_jobs')
+      .update({
+        stage: 'failed',
+        error_message: message,
+        locked_by: null,
+        locked_until: null,
+        updated_at: new Date().toISOString(),
+      })
+      .eq('id', job.id);
+
+    if (error) {
+      console.error(`[Worker Error] Failed to persist failure for job ${job.id}: ${error.message}`);
+    }
+  }
+
+  private async handleJobFailure(job: ProductionJobRecord, errorMessage: string): Promise<void> {
+    const supabase = this.getSupabase();
+    const nextAttempt = job.attempt + 1;
+
+    // Fail closed against duplicate billing:
+    // Any job where submission intent was persisted (error_message starts with or includes SUBMITTING_RENDER or Ambiguous)
+    // CANNOT be retried as 'queued'.
+    const hasStartedSubmission =
+      job.error_message === 'SUBMITTING_RENDER' ||
+      job.error_message?.includes('SUBMITTING_RENDER') ||
+      job.error_message?.includes('Ambiguous') ||
+      errorMessage.includes('SUBMITTING_RENDER') ||
+      errorMessage.includes('Ambiguous');
+
+    const isExplicitProviderFailure =
+      errorMessage.includes('Provider reported render failure') ||
+      errorMessage.includes('PixVerse HTTP 4') ||
+      errorMessage.includes('PixVerse API 4') ||
+      errorMessage.includes('PixVerse 8s maximum');
+
+    // Pre-request failures in 'started' stage (before intent is written) can retry as 'queued'.
+    // Post-submission failures in 'waiting_for_provider' (status check errors) can retry as 'waiting_for_provider'.
+    // In-flight or ambiguous submission attempts MUST NOT retry as 'queued'.
+    const canRetry = nextAttempt <= job.max_attempts &&
+      !isExplicitProviderFailure &&
+      !hasStartedSubmission;
 
     await this.logJobEvent(job.id, 'error', `Job error: ${errorMessage}`, {
       attempt: job.attempt,
@@ -340,7 +464,11 @@ export class WorkerManager {
       // to continue polling instead of re-submitting to the paid provider
       const retryStage: JobStage = job.provider_task_id ? 'waiting_for_provider' : 'queued';
 
-      await supabase
+      job.stage = retryStage;
+      job.error_message = errorMessage;
+      job.attempt = nextAttempt;
+
+      const { error: retryError } = await supabase
         .from('production_jobs')
         .update({
           attempt: nextAttempt,
@@ -351,8 +479,15 @@ export class WorkerManager {
           updated_at: new Date().toISOString(),
         })
         .eq('id', job.id);
+
+      if (retryError) {
+        console.error(`[Worker Error] Failed to update retry status for job ${job.id}: ${retryError.message}`);
+      }
     } else {
-      await supabase
+      job.stage = 'failed';
+      job.error_message = errorMessage;
+
+      const { error: failError } = await supabase
         .from('production_jobs')
         .update({
           stage: 'failed',
@@ -362,11 +497,15 @@ export class WorkerManager {
           updated_at: new Date().toISOString(),
         })
         .eq('id', job.id);
+
+      if (failError) {
+        console.error(`[Worker Error] Failed to update failure status for job ${job.id}: ${failError.message}`);
+      }
     }
   }
 
   private async logJobEvent(jobId: string, level: 'info' | 'warn' | 'error', message: string, metadata = {}): Promise<void> {
-    const supabase = getSupabaseServiceClient();
+    const supabase = this.getSupabase();
     const redacted = WorkerManager.redactSensitiveData(message);
     await supabase.from('job_logs').insert({
       job_id: jobId,

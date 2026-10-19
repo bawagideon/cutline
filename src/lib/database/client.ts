@@ -43,6 +43,13 @@ let publicClientInstance: SupabaseClient | null = null;
 let serviceClientInstance: SupabaseClient | null = null;
 
 /**
+ * Allows overriding service client for testing and dependency injection.
+ */
+export function setSupabaseServiceClient(client: SupabaseClient | null): void {
+  serviceClientInstance = client;
+}
+
+/**
  * Standard client for user sessions and browser interactions (enforces RLS).
  */
 export function getSupabaseClient(): SupabaseClient {

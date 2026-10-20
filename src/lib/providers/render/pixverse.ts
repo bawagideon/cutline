@@ -1,4 +1,11 @@
-import type { IRenderProvider, ProviderCapability, RenderTaskRequest, RenderTaskStatus, RenderTaskSubmission } from './types.ts';
+import {
+  type IRenderProvider,
+  type ProviderCapability,
+  type RenderTaskRequest,
+  type RenderTaskStatus,
+  type RenderTaskSubmission,
+  RenderProviderError,
+} from './types.ts';
 
 export class PixVerseProvider implements IRenderProvider {
   readonly name = 'pixverse';
@@ -17,11 +24,23 @@ export class PixVerseProvider implements IRenderProvider {
   async submitRender(request: RenderTaskRequest, apiKey?: string): Promise<RenderTaskSubmission> {
     const key = apiKey || process.env.PIXVERSE_API_KEY;
     if (!key) {
-      throw new Error('[PixVerse Error] No API key configured. Please configure PixVerse in Integrations vault.');
+      throw new RenderProviderError({
+        message: '[PixVerse Error] No API key configured. Please configure PixVerse in Integrations vault.',
+        provider: 'pixverse',
+        statusCode: 401,
+        definitiveRejection: true,
+        retryable: false,
+      });
     }
 
     if (request.durationSec > this.capabilities.maxDurationSec) {
-      throw new Error(`[PixVerse Error] Requested duration ${request.durationSec}s exceeds PixVerse maximum supported limit of ${this.capabilities.maxDurationSec}s.`);
+      throw new RenderProviderError({
+        message: `[PixVerse Error] Requested duration ${request.durationSec}s exceeds PixVerse maximum supported limit of ${this.capabilities.maxDurationSec}s.`,
+        provider: 'pixverse',
+        statusCode: 400,
+        definitiveRejection: true,
+        retryable: false,
+      });
     }
 
     const apiUrl = process.env.PIXVERSE_API_URL || this.defaultApiUrl;
@@ -50,14 +69,25 @@ export class PixVerseProvider implements IRenderProvider {
 
     if (!response.ok) {
       const errText = await response.text();
-      throw new Error(`[PixVerse API Error ${response.status}] ${errText}`);
+      throw new RenderProviderError({
+        message: `[PixVerse API Error ${response.status}] ${errText}`,
+        provider: 'pixverse',
+        statusCode: response.status,
+        rawResponse: errText,
+      });
     }
 
     const data = await response.json();
     const taskId = data.Resp?.video_id || data.video_id || data.task_id;
 
     if (!taskId) {
-      throw new Error(`[PixVerse Error] Invalid response from PixVerse: missing video task ID.`);
+      throw new RenderProviderError({
+        message: `[PixVerse Error] Invalid response from PixVerse: missing video task ID.`,
+        provider: 'pixverse',
+        statusCode: 502,
+        definitiveRejection: false,
+        retryable: true,
+      });
     }
 
     return {

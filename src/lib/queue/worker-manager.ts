@@ -1,7 +1,7 @@
 import { getSupabaseServiceClient } from '../database/client.ts';
 import { renderManager } from '../providers/render/manager.ts';
 import { downloadAndStoreMedia } from '../providers/storage/downloader.ts';
-import type { RenderProviderName } from '../providers/render/types.ts';
+import { RenderProviderError, type RenderProviderName } from '../providers/render/types.ts';
 
 export type JobStage =
   | 'queued'
@@ -32,6 +32,59 @@ export interface ProductionJobRecord {
   error_message?: string;
   created_at: string;
   updated_at: string;
+}
+
+/**
+ * Thrown when a worker attempts a database write on a job for which it no longer owns the lease,
+ * or whose attempt fencing token has been incremented by a newer claiming worker.
+ */
+export class LostLeaseError extends Error {
+  readonly jobId: string;
+  readonly workerId: string;
+  readonly attempt: number;
+  readonly operation: string;
+
+  constructor(jobId: string, workerId: string, attempt: number, operation: string) {
+    super(
+      `[Fencing Token Violation] Worker ${workerId} lost lease for job ${jobId} (attempt=${attempt}) during operation '${operation}'. Write aborted to prevent queue state corruption.`
+    );
+    this.name = 'LostLeaseError';
+    this.jobId = jobId;
+    this.workerId = workerId;
+    this.attempt = attempt;
+    this.operation = operation;
+    Object.setPrototypeOf(this, LostLeaseError.prototype);
+  }
+}
+
+/**
+ * Classifies whether a provider exception represents a definitive client rejection (4xx validation/param error)
+ * where no render task was started or billed, as opposed to an ambiguous timeout/5xx network failure.
+ */
+export function isDefinitiveProviderRejection(err: unknown): boolean {
+  if (err instanceof RenderProviderError) {
+    return err.definitiveRejection;
+  }
+  if (typeof err === 'object' && err !== null) {
+    const rec = err as { definitiveRejection?: boolean; statusCode?: number; status?: number };
+    if (typeof rec.definitiveRejection === 'boolean') {
+      return rec.definitiveRejection;
+    }
+    const code = rec.statusCode ?? rec.status;
+    if (typeof code === 'number' && code >= 400 && code < 500 && code !== 429) {
+      return true;
+    }
+  }
+  const msg = err instanceof Error ? err.message : String(err);
+  // Robust pattern matching matching real PixVerse adapter formats:
+  // e.g. "[PixVerse API Error 400]", "[PixVerse Error]", "PixVerse HTTP 400", etc.
+  if (/\[?PixVerse (API )?(Error|HTTP)\s*4\d\d\]?/i.test(msg)) {
+    return !msg.includes('429');
+  }
+  if (/HTTP 4\d\d/i.test(msg) && !msg.includes('429')) {
+    return true;
+  }
+  return false;
 }
 
 export class WorkerManager {
@@ -151,28 +204,79 @@ export class WorkerManager {
   }
 
   /**
+   * Executes an atomic state transition conditional on the current fencing token (attempt)
+   * and worker lease ownership (locked_by).
+   * 
+   * Throws LostLeaseError if zero rows were modified, preventing stale or expired workers
+   * from corrupting a newer worker's state or clearing its locks.
+   */
+  async fencedJobUpdate(
+    job: ProductionJobRecord,
+    operation: string,
+    updates: Record<string, unknown>,
+    expectedStage?: JobStage
+  ): Promise<ProductionJobRecord> {
+    const supabase = this.getSupabase();
+    const nowIso = new Date().toISOString();
+    const effectiveWorkerId = job.locked_by || this.workerId;
+
+    let query = supabase
+      .from('production_jobs')
+      .update({
+        ...updates,
+        updated_at: nowIso,
+      })
+      .eq('id', job.id)
+      .eq('attempt', job.attempt)
+      .eq('locked_by', effectiveWorkerId);
+
+    if (expectedStage) {
+      query = query.eq('stage', expectedStage);
+    }
+
+    const { data, error } = await query.select();
+
+    if (error) {
+      throw new Error(`Database failure during fenced write '${operation}' on job ${job.id}: ${error.message}`);
+    }
+
+    // Treat a zero-row update as a lost lease!
+    if (!data || data.length === 0) {
+      const lostLeaseMsg = `Lost lease for job ${job.id} during '${operation}'. Worker ${this.workerId} (attempt ${job.attempt}) was preempted. Zero rows updated.`;
+      await this.logJobEvent(job.id, 'warn', lostLeaseMsg, {
+        attempt: job.attempt,
+        workerId: this.workerId,
+        operation,
+      });
+      throw new LostLeaseError(job.id, this.workerId, job.attempt, operation);
+    }
+
+    const updatedRow = (Array.isArray(data) ? data[0] : data) as ProductionJobRecord;
+    // Synchronize in-memory job state with confirmed database state
+    Object.assign(job, updatedRow);
+    return updatedRow;
+  }
+
+  /**
    * Processes a single job through the canonical pipeline with two-phase paid submission.
    */
   async processJob(job: ProductionJobRecord): Promise<void> {
     const supabase = this.getSupabase();
+
+    // Ensure worker ID is stamped on in-memory job record
+    if (!job.locked_by) {
+      job.locked_by = this.workerId;
+    }
 
     try {
       if (job.stage === 'started') {
         // Idempotency check 1: If provider_task_id is already present, advance immediately to avoid re-billing
         if (job.provider_task_id) {
           await this.logJobEvent(job.id, 'warn', `Job was already submitted (task=${job.provider_task_id}); advancing to waiting_for_provider`);
-          const { error: advanceError } = await supabase
-            .from('production_jobs')
-            .update({
-              stage: 'waiting_for_provider',
-              error_message: null,
-              updated_at: new Date().toISOString(),
-            })
-            .eq('id', job.id);
-          if (advanceError) {
-            throw new Error(`Failed to advance job stage: ${advanceError.message}`);
-          }
-          job.stage = 'waiting_for_provider';
+          await this.fencedJobUpdate(job, 'advance_already_submitted', {
+            stage: 'waiting_for_provider',
+            error_message: null,
+          }, 'started');
           return;
         }
 
@@ -198,21 +302,11 @@ export class WorkerManager {
         }
 
         // Phase 1 of Two-Phase Paid Submission:
-        // Record intent BEFORE calling external provider API to prevent untracked duplicate spends on worker crash
-        const { error: intentError } = await supabase
-          .from('production_jobs')
-          .update({
-            error_message: 'SUBMITTING_RENDER',
-            updated_at: new Date().toISOString(),
-          })
-          .eq('id', job.id);
-
-        if (intentError) {
-          throw new Error(`Failed to record render submission intent: ${intentError.message}`);
-        }
-
-        // CRITICAL: Update in-memory job state immediately so any failure handler knows intent was persisted
-        job.error_message = 'SUBMITTING_RENDER';
+        // Record intent BEFORE calling external provider API to prevent untracked duplicate spends on worker crash.
+        // Fenced update ensures stale worker whose lease expired cannot record intent or proceed to provider call!
+        await this.fencedJobUpdate(job, 'record_submission_intent', {
+          error_message: 'SUBMITTING_RENDER',
+        }, 'started');
 
         await this.logJobEvent(job.id, 'info', `Submitting render to ${job.provider}`, {
           durationSec: scene.duration_sec,
@@ -230,24 +324,16 @@ export class WorkerManager {
             idempotencyKey: job.idempotency_key,
           });
         } catch (providerErr: unknown) {
-          const providerErrMsg = providerErr instanceof Error ? providerErr.message : String(providerErr);
-
-          // Check if provider threw a definitive client-side rejection (4xx validation error) where no render was started
-          const isDefinitiveRejection =
-            providerErrMsg.includes('PixVerse HTTP 4') ||
-            providerErrMsg.includes('PixVerse API 4') ||
-            providerErrMsg.includes('PixVerse 8s maximum') ||
-            providerErrMsg.includes('exceeding PixVerse') ||
-            providerErrMsg.includes('not supported') ||
-            providerErrMsg.includes('unimplemented');
-
-          if (isDefinitiveRejection) {
+          // Check if provider returned a definitive client-side rejection (4xx validation error) where no render was started
+          if (isDefinitiveProviderRejection(providerErr)) {
+            const providerErrMsg = providerErr instanceof Error ? providerErr.message : String(providerErr);
             await this.markJobFailed(job, `Provider rejected render request: ${providerErrMsg}`);
             return;
           }
 
           // Ambiguous error: provider was contacted and could have accepted the request.
           // Automatic resubmission is prohibited to prevent duplicate billing.
+          const providerErrMsg = providerErr instanceof Error ? providerErr.message : String(providerErr);
           const ambiguousMsg = `Ambiguous render submission: Provider call threw an exception (${providerErrMsg}). Automatic resubmission blocked to prevent duplicate billing. Manual reconciliation required.`;
           await this.markAmbiguousSubmissionHalt(job, ambiguousMsg);
           return;
@@ -260,25 +346,24 @@ export class WorkerManager {
         job.is_mock = submission.isMock;
 
         try {
-          const { error: confirmError } = await supabase
-            .from('production_jobs')
-            .update({
-              stage: 'waiting_for_provider',
-              provider_task_id: submission.providerTaskId,
-              cost_usd: submission.costUsd,
-              cost_type: submission.costType,
-              is_mock: submission.isMock,
-              error_message: null,
-              updated_at: new Date().toISOString(),
-            })
-            .eq('id', job.id);
-
-          if (confirmError) {
-            throw confirmError;
-          }
-          job.stage = 'waiting_for_provider';
-          job.error_message = undefined;
+          await this.fencedJobUpdate(job, 'confirm_provider_task', {
+            stage: 'waiting_for_provider',
+            provider_task_id: submission.providerTaskId,
+            cost_usd: submission.costUsd,
+            cost_type: submission.costType,
+            is_mock: submission.isMock,
+            error_message: null,
+          }, 'started');
         } catch (dbConfirmErr: unknown) {
+          if (dbConfirmErr instanceof LostLeaseError) {
+            // Worker lost lease while waiting for provider call.
+            // Log task ID so reconciliation can match it with provider!
+            await this.logJobEvent(job.id, 'error', `Lost lease after provider accepted render (task=${submission.providerTaskId}). Logged for operator reconciliation.`, {
+              providerTaskId: submission.providerTaskId,
+              attempt: job.attempt,
+            });
+            throw dbConfirmErr;
+          }
           // Provider accepted the render, but saving task ID failed! Automatic resubmission must be blocked!
           const dbErrMsg = dbConfirmErr instanceof Error ? dbConfirmErr.message : String(dbConfirmErr);
           const confirmFailMsg = `Ambiguous render confirmation failure: Provider accepted render (task=${submission.providerTaskId}), but saving task ID failed (${dbErrMsg}). Automatic resubmission blocked.`;
@@ -297,17 +382,9 @@ export class WorkerManager {
         if (status.status === 'done' && status.videoUrl) {
           await this.logJobEvent(job.id, 'info', `task=${job.provider_task_id} status=done`);
 
-          const { error: dlStageError } = await supabase
-            .from('production_jobs')
-            .update({
-              stage: 'downloading',
-              updated_at: new Date().toISOString(),
-            })
-            .eq('id', job.id);
-
-          if (dlStageError) {
-            throw new Error(`Failed to update job to downloading stage: ${dlStageError.message}`);
-          }
+          await this.fencedJobUpdate(job, 'transition_to_downloading', {
+            stage: 'downloading',
+          }, 'waiting_for_provider');
 
           // Safe download with host validation & hash verification
           const destPath = `episodes/${job.episode_id}/scenes/${job.scene_id}.mp4`;
@@ -336,24 +413,21 @@ export class WorkerManager {
           }
 
           // Advance job to awaiting_review
-          const { error: reviewError } = await supabase
-            .from('production_jobs')
-            .update({
-              stage: 'awaiting_review',
-              locked_by: null,
-              locked_until: null,
-              updated_at: new Date().toISOString(),
-            })
-            .eq('id', job.id);
-
-          if (reviewError) {
-            throw new Error(`Failed to advance job to awaiting_review: ${reviewError.message}`);
-          }
+          await this.fencedJobUpdate(job, 'transition_to_awaiting_review', {
+            stage: 'awaiting_review',
+            locked_by: null,
+            locked_until: null,
+          }, 'downloading');
         } else if (status.status === 'failed') {
           throw new Error(status.error || 'Provider reported render failure.');
         }
       }
     } catch (err: unknown) {
+      if (err instanceof LostLeaseError) {
+        // Worker was preempted by another worker. Cease execution immediately.
+        // DO NOT invoke handleJobFailure; DO NOT attempt to rewrite the job state.
+        return;
+      }
       const errorMessage = err instanceof Error ? err.message : String(err);
       await this.handleJobFailure(job, errorMessage);
     }
@@ -365,7 +439,6 @@ export class WorkerManager {
    * and preserves provider_task_id if one was already returned.
    */
   async markAmbiguousSubmissionHalt(job: ProductionJobRecord, message: string, providerTaskId?: string): Promise<void> {
-    const supabase = this.getSupabase();
     job.stage = 'failed';
     job.error_message = message;
     if (providerTaskId) {
@@ -383,19 +456,18 @@ export class WorkerManager {
       error_message: message,
       locked_by: null,
       locked_until: null,
-      updated_at: new Date().toISOString(),
     };
     if (providerTaskId) {
       updatePayload.provider_task_id = providerTaskId;
     }
 
-    const { error } = await supabase
-      .from('production_jobs')
-      .update(updatePayload)
-      .eq('id', job.id);
-
-    if (error) {
-      console.error(`[Worker Error] Failed to persist ambiguous submission halt for job ${job.id}: ${error.message}`);
+    try {
+      await this.fencedJobUpdate(job, 'halt_ambiguous_submission', updatePayload);
+    } catch (err: unknown) {
+      if (err instanceof LostLeaseError) {
+        return;
+      }
+      console.error(`[Worker Error] Failed to persist ambiguous submission halt for job ${job.id}: ${err instanceof Error ? err.message : String(err)}`);
     }
   }
 
@@ -403,7 +475,6 @@ export class WorkerManager {
    * Transitions a job to 'failed' permanently (non-retryable).
    */
   async markJobFailed(job: ProductionJobRecord, message: string): Promise<void> {
-    const supabase = this.getSupabase();
     job.stage = 'failed';
     job.error_message = message;
 
@@ -411,24 +482,22 @@ export class WorkerManager {
       attempt: job.attempt,
     });
 
-    const { error } = await supabase
-      .from('production_jobs')
-      .update({
+    try {
+      await this.fencedJobUpdate(job, 'mark_job_failed', {
         stage: 'failed',
         error_message: message,
         locked_by: null,
         locked_until: null,
-        updated_at: new Date().toISOString(),
-      })
-      .eq('id', job.id);
-
-    if (error) {
-      console.error(`[Worker Error] Failed to persist failure for job ${job.id}: ${error.message}`);
+      });
+    } catch (err: unknown) {
+      if (err instanceof LostLeaseError) {
+        return;
+      }
+      console.error(`[Worker Error] Failed to persist failure for job ${job.id}: ${err instanceof Error ? err.message : String(err)}`);
     }
   }
 
   private async handleJobFailure(job: ProductionJobRecord, errorMessage: string): Promise<void> {
-    const supabase = this.getSupabase();
     const nextAttempt = job.attempt + 1;
 
     // Fail closed against duplicate billing:
@@ -441,11 +510,8 @@ export class WorkerManager {
       errorMessage.includes('SUBMITTING_RENDER') ||
       errorMessage.includes('Ambiguous');
 
-    const isExplicitProviderFailure =
-      errorMessage.includes('Provider reported render failure') ||
-      errorMessage.includes('PixVerse HTTP 4') ||
-      errorMessage.includes('PixVerse API 4') ||
-      errorMessage.includes('PixVerse 8s maximum');
+    const isExplicitProviderFailure = isDefinitiveProviderRejection(errorMessage) ||
+      errorMessage.includes('Provider reported render failure');
 
     // Pre-request failures in 'started' stage (before intent is written) can retry as 'queued'.
     // Post-submission failures in 'waiting_for_provider' (status check errors) can retry as 'waiting_for_provider'.
@@ -459,48 +525,33 @@ export class WorkerManager {
       canRetry,
     });
 
-    if (canRetry) {
-      // If the job already has a confirmed provider task ID, retry in waiting_for_provider
-      // to continue polling instead of re-submitting to the paid provider
-      const retryStage: JobStage = job.provider_task_id ? 'waiting_for_provider' : 'queued';
+    try {
+      if (canRetry) {
+        // If the job already has a confirmed provider task ID, retry in waiting_for_provider
+        // to continue polling instead of re-submitting to the paid provider
+        const retryStage: JobStage = job.provider_task_id ? 'waiting_for_provider' : 'queued';
 
-      job.stage = retryStage;
-      job.error_message = errorMessage;
-      job.attempt = nextAttempt;
-
-      const { error: retryError } = await supabase
-        .from('production_jobs')
-        .update({
+        await this.fencedJobUpdate(job, 'retry_job', {
           attempt: nextAttempt,
           stage: retryStage,
           error_message: errorMessage,
           locked_by: null,
           locked_until: null,
-          updated_at: new Date().toISOString(),
-        })
-        .eq('id', job.id);
-
-      if (retryError) {
-        console.error(`[Worker Error] Failed to update retry status for job ${job.id}: ${retryError.message}`);
-      }
-    } else {
-      job.stage = 'failed';
-      job.error_message = errorMessage;
-
-      const { error: failError } = await supabase
-        .from('production_jobs')
-        .update({
+        });
+      } else {
+        await this.fencedJobUpdate(job, 'fail_job', {
           stage: 'failed',
           error_message: errorMessage,
           locked_by: null,
           locked_until: null,
-          updated_at: new Date().toISOString(),
-        })
-        .eq('id', job.id);
-
-      if (failError) {
-        console.error(`[Worker Error] Failed to update failure status for job ${job.id}: ${failError.message}`);
+        });
       }
+    } catch (err: unknown) {
+      if (err instanceof LostLeaseError) {
+        // Stale worker was preempted; abort without overwriting state
+        return;
+      }
+      console.error(`[Worker Error] Failed to update failure/retry status for job ${job.id}: ${err instanceof Error ? err.message : String(err)}`);
     }
   }
 

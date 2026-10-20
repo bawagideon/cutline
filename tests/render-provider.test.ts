@@ -93,4 +93,38 @@ describe('Render Provider Pipeline & Duration Limits', () => {
       globalThis.fetch = originalFetch;
     }
   });
+
+  it('throws structured RenderProviderError on PixVerse HTTP 400 error with generic body', async () => {
+    const { PixVerseProvider } = await import('../src/lib/providers/render/pixverse.ts');
+    const { RenderProviderError } = await import('../src/lib/providers/render/types.ts');
+    const pixverse = new PixVerseProvider();
+
+    const originalFetch = globalThis.fetch;
+    try {
+      globalThis.fetch = async () =>
+        new Response(JSON.stringify({ code: 400, message: 'Invalid prompt parameter' }), {
+          status: 400,
+          headers: { 'Content-Type': 'application/json' },
+        });
+
+      await assert.rejects(
+        async () => {
+          await pixverse.submitRender(
+            { prompt: 'bad prompt', durationSec: 5, aspectRatio: '16:9' },
+            'test-key-123'
+          );
+        },
+        (err: any) => {
+          assert.ok(err instanceof RenderProviderError, 'Must throw RenderProviderError');
+          assert.equal(err.statusCode, 400);
+          assert.equal(err.definitiveRejection, true, 'HTTP 400 must be marked definitiveRejection: true');
+          assert.equal(err.retryable, false, 'HTTP 400 must be marked retryable: false');
+          assert.equal(err.provider, 'pixverse');
+          return true;
+        }
+      );
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+  });
 });

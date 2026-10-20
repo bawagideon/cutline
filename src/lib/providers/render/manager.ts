@@ -1,4 +1,12 @@
-import type { IRenderProvider, ProviderCapability, RenderProviderName, RenderTaskRequest, RenderTaskStatus, RenderTaskSubmission } from './types.ts';
+import {
+  type IRenderProvider,
+  type ProviderCapability,
+  type RenderProviderName,
+  type RenderTaskRequest,
+  type RenderTaskStatus,
+  type RenderTaskSubmission,
+  RenderProviderError,
+} from './types.ts';
 import { PixVerseProvider } from './pixverse.ts';
 import { DevMockProvider } from './mock.ts';
 import { UnimplementedRenderProvider } from './unimplemented.ts';
@@ -58,12 +66,24 @@ export class RenderManager {
     const provider = this.getProvider(providerName);
 
     if (!provider.capabilities.implemented) {
-      throw new Error(`[RenderManager] Provider '${provider.capabilities.displayName}' is not implemented. Production renders require an operational provider.`);
+      throw new RenderProviderError({
+        message: `[RenderManager] Provider '${provider.capabilities.displayName}' is not implemented. Production renders require an operational provider.`,
+        provider: providerName,
+        statusCode: 501,
+        definitiveRejection: true,
+        retryable: false,
+      });
     }
 
     const durationCheck = this.validateSceneDuration(providerName, request.durationSec);
     if (!durationCheck.valid) {
-      throw new Error(`[RenderManager] ${durationCheck.reason}`);
+      throw new RenderProviderError({
+        message: `[RenderManager] ${durationCheck.reason}`,
+        provider: providerName,
+        statusCode: 400,
+        definitiveRejection: true,
+        retryable: false,
+      });
     }
 
     return await provider.submitRender(request, apiKey);
